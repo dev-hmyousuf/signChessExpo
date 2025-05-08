@@ -5,15 +5,19 @@ import { getFilenameFromUri, getMimeType } from '@/app/utils/fileUtils';
 // ======================================================================
 // SERVER CONFIGURATION
 // ======================================================================
-// For testing on a real device, use your computer's local network IP address
+// Set your Railway.com deployed server URL here (without trailing slash)
 // Examples:
-// - Local testing (emulator): 'http://10.0.2.2:3000' (Android) or 'http://localhost:3000' (iOS)
-// - Network testing (real device): 'http://192.168.1.5:3000' (use your computer's IP)
-// 
-// You can find your computer's IP using: Terminal → ifconfig (Mac/Linux) or ipconfig (Windows)
-// or by checking the server console output which displays the local IP address
+// - Development testing: 'http://192.168.1.5:3000' (local network)
+// - Railway deployment: 'https://your-app-name.railway.app'
 // ======================================================================
-const SERVER_URL = 'http://192.168.110.226:3000'; // Use your actual IP
+
+// IMPORTANT: CHANGE THIS VALUE TO YOUR RAILWAY DEPLOYED SERVER URL
+const SERVER_URL = 'https://your-app-name.railway.app';
+
+// For local development (uncomment the appropriate line for testing):
+// const SERVER_URL = 'http://10.0.2.2:3000';      // Android Emulator
+// const SERVER_URL = 'http://localhost:3000';     // iOS Simulator
+// const SERVER_URL = 'http://192.168.110.226:3000'; // Local network (use your actual IP)
 
 /**
  * Uploads an image to the backend server from a URI
