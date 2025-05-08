@@ -13,12 +13,14 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.athex-web3.signchess"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#ffffff",
+        "package": "com.athex-web3.signchess"
       }
     },
     "web": {
@@ -33,6 +35,7 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "newArchEnabled": true
   }
 }

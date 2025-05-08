@@ -2,11 +2,46 @@ import { useFonts } from 'expo-font'
 import { Slot } from 'expo-router'
 import * as SplashScreen from 'expo-splash-screen'
 import { useEffect } from 'react'
-import { ClerkProvider } from '@clerk/clerk-expo'
-import { tokenCache } from '@/cache'
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { StatusBar } from 'expo-status-bar';
+import { account, getCurrentSession } from '@/lib/appwrite';
+import { THEME } from '@/app/utils/theme';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import 'react-native-reanimated';
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync()
+
+// Wrapper component to handle Appwrite auth
+function AppContent() {
+  useEffect(() => {
+    const initAppwrite = async () => {
+      try {
+        // Check if we have an existing session first
+        const session = await getCurrentSession();
+        
+        if (session) {
+          console.log('Already authenticated with Appwrite, session:', session.$id);
+        } else {
+          console.log('No authenticated Appwrite session found');
+        }
+        
+        console.log('Appwrite initialized');
+      } catch (error) {
+        console.error('Failed to initialize Appwrite:', error);
+      }
+    };
+
+    initAppwrite();
+  }, []);
+
+  return (
+    <>
+      <StatusBar style="dark" backgroundColor={THEME.white} />
+      <Slot />
+    </>
+  );
+}
 
 export default function RootLayout() {
   const [loaded] = useFonts({
@@ -15,7 +50,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (loaded) {
-      SplashScreen.hideAsync()
+      SplashScreen.hideAsync();
     }
   }, [loaded])
 
@@ -23,15 +58,11 @@ export default function RootLayout() {
     return null
   }
 
-  const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!
-
-  if (!publishableKey) {
-    throw new Error('Missing Publishable Key. Please set EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY in your .env')
-  }
-
   return (
-    <ClerkProvider tokenCache={tokenCache} publishableKey={publishableKey}>
-      <Slot />
-    </ClerkProvider>
+    <SafeAreaProvider>
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: THEME.light }}>
+        <AppContent />
+      </GestureHandlerRootView>
+    </SafeAreaProvider>
   )
 }

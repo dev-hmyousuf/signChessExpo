@@ -1,26 +1,59 @@
-import { useClerk } from '@clerk/clerk-expo'
-import * as Linking from 'expo-linking'
-import { Text, TouchableOpacity } from 'react-native'
+import React from 'react'
+import { TouchableOpacity, Text, StyleSheet, StyleProp, ViewStyle, ActivityIndicator } from 'react-native'
+import { router } from 'expo-router'
+import { logout } from '@/lib/appwrite'
+import { THEME, BORDER_RADIUS } from '@/app/utils/theme'
 
-export const SignOutButton = () => {
-  // Use `useClerk()` to access the `signOut()` function
-  const { signOut } = useClerk()
+type SignOutButtonProps = {
+  style?: StyleProp<ViewStyle>
+}
 
-  const handleSignOut = async () => {
+export function SignOutButton({ style }: SignOutButtonProps) {
+  const [loading, setLoading] = React.useState(false)
+
+  const onSignOutPress = async () => {
     try {
-      await signOut()
-      // Redirect to your desired page
-      Linking.openURL(Linking.createURL('/'))
+      setLoading(true)
+      const success = await logout()
+      if (success) {
+        router.replace('/')
+      }
     } catch (err) {
-      // See https://clerk.com/docs/custom-flows/error-handling
-      // for more info on error handling
-      console.error(JSON.stringify(err, null, 2))
+      console.error('Error signing out:', err)
+    } finally {
+      setLoading(false)
     }
   }
 
   return (
-    <TouchableOpacity onPress={handleSignOut}>
-      <Text>Sign out</Text>
+    <TouchableOpacity
+      style={[styles.button, style]}
+      onPress={onSignOutPress}
+      disabled={loading}
+    >
+      {loading ? (
+        <ActivityIndicator size="small" color={THEME.danger} />
+      ) : (
+        <Text style={styles.text}>Sign Out</Text>
+      )}
     </TouchableOpacity>
   )
 }
+
+const styles = StyleSheet.create({
+  button: {
+    backgroundColor: 'rgba(244, 67, 54, 0.1)', // Transparent danger color
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: BORDER_RADIUS.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  text: {
+    color: THEME.danger,
+    fontWeight: '500',
+  },
+})
+
+// Export SignOutButton as default
+export default SignOutButton;
