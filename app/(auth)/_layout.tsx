@@ -1,30 +1,36 @@
 import React from 'react';
-import { Stack } from 'expo-router';
+import { Redirect, Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, StyleSheet } from 'react-native';
 import { THEME } from '@/app/utils/theme';
+import { useUser } from '@/lib/clerk';
 
 export default function AuthLayout() {
+  const { isSignedIn } = useUser();
+
+  if (isSignedIn) {
+    return <Redirect href="/(home)" />;
+  }
+
   return (
     <View style={styles.container}>
       <StatusBar style="dark" />
       <Stack
         screenOptions={{
+          headerStyle: {
+            backgroundColor: THEME.white,
+          },
+          headerTintColor: THEME.primary,
+          headerTitleStyle: {
+            fontWeight: 'bold',
+          },
           headerShown: false,
-          contentStyle: { backgroundColor: 'transparent' },
-          animation: 'slide_from_right',
         }}
       >
         <Stack.Screen
           name="sign-in"
           options={{
             title: 'Sign In',
-          }}
-        />
-        <Stack.Screen
-          name="sign-up"
-          options={{
-            title: 'Sign Up',
           }}
         />
       </Stack>

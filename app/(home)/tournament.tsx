@@ -9,12 +9,13 @@ import {
   StatusBar,
   ActivityIndicator,
   GestureResponderEvent,
-  Alert
+  Alert,
+  RefreshControl
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { getCountries } from '@/lib/appwrite';
-import { Models } from 'appwrite';
+import { getCountries, getPlayersByCountry } from '@/lib/appwrite';
+import { Models } from 'react-native-appwrite';
 import { THEME, TYPOGRAPHY, BORDER_RADIUS, SHADOWS, SPACING } from '@/app/utils/theme';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeInDown, useSharedValue, useAnimatedStyle, interpolate, withTiming } from 'react-native-reanimated';
@@ -22,10 +23,106 @@ import Animated, { FadeIn, FadeInDown, useSharedValue, useAnimatedStyle, interpo
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
 interface Country extends Models.Document {
-  name: string;
-  flag: string;
+  name?: string;
+  flag?: string;
   playerCount?: number;
+  approvedPlayerCount?: number;
+  flagEmoji?: string;
 }
+
+interface Player extends Models.Document {
+  status?: string;
+}
+
+// Helper function to convert country code to flag emoji
+const getFlagEmoji = (countryCode?: string) => {
+  if (!countryCode) return '🏳️';
+  
+  // If the input starts with a flag emoji, return it as is
+  if (countryCode.startsWith('🇦') || 
+      countryCode.startsWith('🇧') || 
+      countryCode.startsWith('🇨') || 
+      countryCode.startsWith('🇩') || 
+      countryCode.startsWith('🇪') || 
+      countryCode.startsWith('🇫') || 
+      countryCode.startsWith('🇬') || 
+      countryCode.startsWith('🇭') || 
+      countryCode.startsWith('🇮') || 
+      countryCode.startsWith('🇯') || 
+      countryCode.startsWith('🇰') || 
+      countryCode.startsWith('🇱') || 
+      countryCode.startsWith('🇲') || 
+      countryCode.startsWith('🇳') || 
+      countryCode.startsWith('🇴') || 
+      countryCode.startsWith('🇵') || 
+      countryCode.startsWith('🇶') || 
+      countryCode.startsWith('🇷') || 
+      countryCode.startsWith('🇸') || 
+      countryCode.startsWith('🇹') || 
+      countryCode.startsWith('🇺') || 
+      countryCode.startsWith('🇻') || 
+      countryCode.startsWith('🇼') || 
+      countryCode.startsWith('🇽') || 
+      countryCode.startsWith('🇾') || 
+      countryCode.startsWith('🇿')) {
+    return countryCode; // Already a flag emoji
+  }
+  
+  // Check if it looks like a complete flag emoji (two regional indicators together)
+  if (countryCode.length >= 4 && countryCode.includes('')) {
+    return countryCode; // Already a flag emoji string
+  }
+  
+  // Handle special cases or commonly problematic codes
+  const specialCases: {[key: string]: string} = {
+    'en': '🇬🇧', // English -> UK flag as fallback
+    'us': '🇺🇸',
+    'uk': '🇬🇧',
+    'gb': '🇬🇧',
+    'ca': '🇨🇦',
+    'au': '🇦🇺',
+    'in': '🇮🇳',
+    'jp': '🇯🇵',
+    'cn': '🇨🇳',
+    'de': '🇩🇪',
+    'fr': '🇫🇷',
+    'it': '🇮🇹',
+    'ru': '🇷🇺',
+    'br': '🇧🇷',
+    'mx': '🇲🇽',
+    'es': '🇪🇸',
+  };
+  
+  // Normalize code (strip spaces, lowercase)
+  const normalizedCode = countryCode.trim().toLowerCase();
+  
+  // Check if it's a special case
+  if (specialCases[normalizedCode]) {
+    return specialCases[normalizedCode];
+  }
+  
+  // Check if it's a URL instead of a code
+  if (normalizedCode.includes('/') || normalizedCode.includes('.')) {
+    console.log('Country code appears to be a URL:', normalizedCode);
+    return '🏳️';
+  }
+  
+  // Only use the first two characters if it's longer
+  const codeToUse = normalizedCode.length > 2 ? normalizedCode.substring(0, 2) : normalizedCode;
+  
+  try {
+    // Convert country code to flag emoji
+    const codePoints = codeToUse
+      .toUpperCase()
+      .split('')
+      .map(char => 127397 + char.charCodeAt(0));
+    
+    return String.fromCodePoint(...codePoints);
+  } catch (e) {
+    console.error('Error converting country code to emoji:', countryCode, e);
+    return '🏳️'; // Default flag as fallback
+  }
+};
 
 const TournamentScreen = () => {
   const router = useRouter();
@@ -34,6 +131,7 @@ const TournamentScreen = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retried, setRetried] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Animation values
   const headerOpacity = useSharedValue(0);
@@ -41,7 +139,7 @@ const TournamentScreen = () => {
 
   // Use this function to navigate to Dev Tools if no data
   const goToDevTools = () => {
-    router.push('/components/dev-tools');
+    router.push('/dev-tools');
   };
 
   const fetchCountries = async (retry = false) => {
@@ -49,9 +147,54 @@ const TournamentScreen = () => {
       setLoading(true);
       
       const countriesData = await getCountries();
+      
+      // Debug: Inspect the first country object to understand its structure
+      if (__DEV__ && countriesData.length > 0) {
+        console.log('Sample country data structure:', JSON.stringify(countriesData[0], null, 2));
+      }
+      
+      // Fetch player counts for each country (approved only)
+      const countriesWithPlayerCounts = await Promise.all(
+        countriesData.map(async (country: any) => {
+          try {
+            // Fetch all players for the country
+            const players = await getPlayersByCountry(country.$id) as Player[];
+            
+            // Count only approved players
+            const approvedPlayers = players.filter(player => player.status === 'approved');
+            
+            // Generate flag emoji from country code
+            const flagEmoji = getFlagEmoji(country.flag);
+            
+            return {
+              ...country,
+              approvedPlayerCount: approvedPlayers.length,
+              flagEmoji
+            };
+          } catch (err) {
+            console.error(`Error fetching players for country ${country.name || country.$id}:`, err);
+            return {
+              ...country,
+              approvedPlayerCount: 0,
+              flagEmoji: getFlagEmoji(country.flag)
+            };
+          }
+        })
+      );
+      
       // Type casting the documents to our Country interface
-      setCountries(countriesData as unknown as Country[]);
+      setCountries(countriesWithPlayerCounts as Country[]);
       setError(null);
+      
+      // Debug: Check if flag emojis were properly generated
+      if (__DEV__) {
+        console.log('Countries with flags:', countriesWithPlayerCounts.map(c => ({
+          id: c.$id,
+          name: c.name,
+          flag: c.flag,
+          flagEmoji: c.flagEmoji
+        })));
+      }
       
       // If no countries found, offer to go to dev tools
       if (countriesData.length === 0 && !retry) {
@@ -77,6 +220,7 @@ const TournamentScreen = () => {
       setError('Failed to load countries. Please check Appwrite permissions or try again later.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
       // Animate in the UI elements
       headerOpacity.value = withTiming(1, { duration: 500 });
       listOpacity.value = withTiming(1, { duration: 800 });
@@ -88,12 +232,18 @@ const TournamentScreen = () => {
     setRetried(false);
     fetchCountries();
   };
+  
+  // Handle pull-to-refresh
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchCountries();
+  };
 
   useEffect(() => {
     fetchCountries();
   }, []);
 
-  // Get flags by country code
+  // Get flags by country code - for image URL (backup approach)
   const getFlagUrl = (countryCode: string): string => {
     return `https://flagcdn.com/w320/${countryCode.toLowerCase()}.png`;
   };
@@ -113,7 +263,7 @@ const TournamentScreen = () => {
     };
   });
 
-  if (loading) {
+  if (loading && !refreshing) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.loadingContainer}>
@@ -182,26 +332,43 @@ const TournamentScreen = () => {
           data={countries}
           keyExtractor={(item) => item.$id}
           contentContainerStyle={styles.listContainer}
-          renderItem={({ item, index }) => (
-            <AnimatedTouchable 
-              style={styles.countryCard}
-              onPress={() => router.push(`/tournament/${item.name}`)}
-              entering={FadeInDown.delay(100 * index).duration(400)}
-            >
-              <Image 
-                source={{ uri: getFlagUrl(item.flag) }} 
-                style={styles.countryFlag}
-                resizeMode="cover"
-              />
-              <View style={styles.countryInfo}>
-                <Text style={styles.countryName}>{item.name}</Text>
-                <Text style={styles.matchCount}>{item.playerCount || 0} participants</Text>
-              </View>
-              <View style={styles.arrowContainer}>
-                <Ionicons name="chevron-forward" size={20} color={THEME.textSecondary} />
-              </View>
-            </AnimatedTouchable>
-          )}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[THEME.primary, THEME.primaryDark]}
+              tintColor={THEME.primary}
+              title="Pull to refresh"
+              titleColor={THEME.textSecondary}
+            />
+          }
+          renderItem={({ item, index }) => {
+            // Validate flag data for debugging
+            if (__DEV__ && (!item.flagEmoji || item.flagEmoji === '🏳️')) {
+              console.log(`Country ${item.name || item.$id} has missing or invalid flag data:`, item.flag);
+            }
+            
+            return (
+              <AnimatedTouchable 
+                style={styles.countryCard}
+                onPress={() => router.push(`/tournament/${item.name || item.$id}`)}
+                entering={FadeInDown.delay(100 * index).duration(400)}
+              >
+                <View style={styles.flagContainer}>
+                  <Text style={styles.flagEmoji}>{item.flagEmoji || '🏳️'}</Text>
+                </View>
+                <View style={styles.countryInfo}>
+                  <Text style={styles.countryName}>{item.name || 'Unknown Country'}</Text>
+                  <Text style={styles.matchCount}>
+                    <Text style={styles.approvedCount}>{item.approvedPlayerCount || 0}</Text> approved participants
+                  </Text>
+                </View>
+                <View style={styles.arrowContainer}>
+                  <Ionicons name="chevron-forward" size={20} color={THEME.textSecondary} />
+                </View>
+              </AnimatedTouchable>
+            );
+          }}
           ListEmptyComponent={
             <View style={styles.emptyState}>
               <Text style={styles.emptyStateText}>No countries available</Text>
@@ -343,6 +510,19 @@ const styles = StyleSheet.create({
     padding: SPACING.md,
     ...SHADOWS.small,
   },
+  flagContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: THEME.light,
+    marginRight: SPACING.md,
+    overflow: 'hidden',
+  },
+  flagEmoji: {
+    fontSize: 30,
+  },
   countryFlag: {
     width: 48,
     height: 32,
@@ -361,6 +541,10 @@ const styles = StyleSheet.create({
     fontSize: TYPOGRAPHY.bodySmall.fontSize,
     color: THEME.textSecondary,
     marginTop: 2,
+  },
+  approvedCount: {
+    fontWeight: '700',
+    color: THEME.primary,
   },
   arrowContainer: {
     padding: SPACING.xs,

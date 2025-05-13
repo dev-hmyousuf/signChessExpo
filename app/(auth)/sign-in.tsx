@@ -1,267 +1,282 @@
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-  Image,
-  ScrollView,
-} from 'react-native';
-import { useSignIn } from '@clerk/clerk-expo';
-import { useRouter } from 'expo-router';
-import { LinearGradient } from 'expo-linear-gradient';
+import * as React from "react";
+import { View, Image, Text, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator, StatusBar } from "react-native";
+import { useSSO } from "@/lib/clerk";
+import * as AuthSession from "expo-auth-session";
+import * as WebBrowser from "expo-web-browser";
+import { router } from "expo-router";
 import { Ionicons } from '@expo/vector-icons';
-import { THEME, TYPOGRAPHY, BORDER_RADIUS, SHADOWS } from '@/app/utils/theme';
+import { LinearGradient } from 'expo-linear-gradient';
+import { THEME, SPACING, BORDER_RADIUS } from "@/app/utils/theme";
 
-export default function SignInScreen() {
-  const { signIn, setActive, isLoaded } = useSignIn();
-  const router = useRouter();
-  
-  const [emailAddress, setEmailAddress] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  
-  const onSignInPress = async () => {
-    if (!isLoaded) {
-      return;
-    }
-    
-    setLoading(true);
-    setError('');
-    
+// Handle any pending auth sessions
+WebBrowser.maybeCompleteAuthSession();
+
+export default function SignIn() {
+  const { startSSOFlow } = useSSO();
+  const [isLoading, setIsLoading] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  const handleGoogleAuth = async () => {
     try {
-      const signInAttempt = await signIn.create({
-        identifier: emailAddress,
-        password,
-      });
+      setIsLoading(true);
+      setError("");
       
-      // Check if signIn requires more steps
-      if (signInAttempt.status === 'complete') {
-        await setActive({ session: signInAttempt.createdSessionId });
-        router.replace('/');
-      } else {
-        console.log('Sign in attempt not complete', signInAttempt);
-        setError('Something went wrong. Please try again.');
+      // Use standard Expo redirect URI
+      const redirectUrl = AuthSession.makeRedirectUri();
+      
+      // This initiates the OAuth flow with Google
+      const result = await startSSOFlow({
+        strategy: "oauth_google",
+        redirectUrl,
+      });
+
+      console.log("OAuth flow result:", JSON.stringify(result));
+
+      // If we get a createdSessionId, authentication was successful
+      if (result.createdSessionId) {
+        await result.setActive!({ session: result.createdSessionId });
+        router.replace("/(home)");
+      } 
+      // For new users that need to complete sign-up
+      else if (result.signUp) {
+        console.log("New user - completing sign-up");
+        
+        try {
+          // Generate a temporary username with clerk_{name} pattern
+          let nameBase = result.signUp.firstName?.toLowerCase() || '';
+          // Remove special characters and spaces
+          nameBase = nameBase.replace(/[^a-z0-9]/g, '');
+          
+          // If no name is available, use a random number
+          const tempUsername = nameBase ? 
+            `clerk_${nameBase}` : 
+            `clerk_user${Math.floor(Math.random() * 1000000)}`;
+          
+          // Complete sign-up with temporary username
+          const signUpAttempt = await result.signUp.update({
+            username: tempUsername
+          });
+          
+          console.log("Sign-up completed:", signUpAttempt.status);
+          
+          if (signUpAttempt.status === "complete") {
+            await result.setActive!({ session: signUpAttempt.createdSessionId });
+            
+            // Still redirect to username setup
+            router.replace("/onboarding/username");
+          } else {
+            console.log("Additional sign-up steps required:", signUpAttempt);
+            setError("Additional steps required. Please try again.");
+          }
+        } catch (signUpError) {
+          console.error("Sign-up error:", signUpError);
+          setError("Failed to complete sign-up. Please try again.");
+        }
+      }
+      // For existing users that need to complete sign-in
+      else if (result.signIn) {
+        console.log("Existing user - completing sign-in");
+        try {
+          const signInResult = await result.signIn.create({
+            strategy: "oauth_google",
+            redirectUrl,
+          });
+          
+          if (signInResult.status === "complete") {
+            await result.setActive!({ session: signInResult.createdSessionId });
+            router.replace("/(home)");
+          } else {
+            console.log("Additional sign-in steps required:", signInResult);
+            setError("Additional steps required. Please try again.");
+          }
+        } catch (signInError) {
+          console.error("Sign-in error:", signInError);
+          setError("Failed to complete sign-in. Please try again.");
+        }
       }
     } catch (err) {
-      console.error('Error during sign in:', err);
-      setError(err.errors?.[0]?.message || 'Something went wrong. Please try again.');
+      console.error("Authentication error:", err);
+      setError("Failed to authenticate with Google. Please try again.");
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
-  
-  const togglePasswordVisibility = () => {
-    setShowPassword(!showPassword);
-  };
-  
+
   return (
-    <LinearGradient
-      colors={[THEME.primaryTransparent, THEME.light]}
-      style={styles.gradient}
-    >
-      <KeyboardAvoidingView
-        style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor={THEME.light} />
+      <LinearGradient
+        colors={[THEME.light, THEME.white]}
+        style={styles.gradient}
       >
-        <ScrollView
-          contentContainerStyle={styles.scrollContainer}
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={styles.logoContainer}>
-            <Image 
-              source={require('@/assets/images/icon.png')}
+        <View style={styles.content}>
+          <View style={styles.header}>
+            <Image
+              source={require("@/assets/images/icon.png")}
               style={styles.logo}
-              resizeMode="contain"
             />
-            <Text style={styles.appName}>Cricket Dynasty</Text>
-            <Text style={styles.tagline}>Sign in to your account</Text>
+            <Text style={styles.title}>Welcome Back</Text>
+            <Text style={styles.subtitle}>Sign in to continue to your account</Text>
+            
+            {error ? (
+              <View style={styles.errorContainer}>
+                <Ionicons name="alert-circle" size={20} color={THEME.danger} />
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            ) : null}
           </View>
           
-          {error ? (
-            <View style={styles.errorContainer}>
-              <Ionicons name="alert-circle-outline" size={20} color={THEME.danger} />
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          ) : null}
-          
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Email</Text>
-            <View style={styles.inputWrapper}>
-              <Ionicons name="mail-outline" size={20} color={THEME.textSecondary} style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="Enter your email"
-                placeholderTextColor={THEME.mediumGray}
-                value={emailAddress}
-                onChangeText={setEmailAddress}
-                autoCapitalize="none"
-                keyboardType="email-address"
-                editable={!loading}
-              />
-            </View>
-          </View>
-          
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Password</Text>
-            <View style={styles.inputWrapper}>
-              <Ionicons name="lock-closed-outline" size={20} color={THEME.textSecondary} style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="Enter your password"
-                placeholderTextColor={THEME.mediumGray}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!showPassword}
-                autoCapitalize="none"
-                editable={!loading}
-              />
-              <TouchableOpacity onPress={togglePasswordVisibility} style={styles.visibilityToggle}>
-                <Ionicons 
-                  name={showPassword ? 'eye-off-outline' : 'eye-outline'} 
-                  size={20} 
-                  color={THEME.textSecondary} 
-                />
-              </TouchableOpacity>
-            </View>
-          </View>
-          
-          <TouchableOpacity
-            style={[styles.signInButton, loading && styles.signInButtonDisabled]}
-            onPress={onSignInPress}
-            disabled={loading || !emailAddress || !password}
-          >
-            {loading ? (
-              <ActivityIndicator color={THEME.white} />
-            ) : (
-              <Text style={styles.signInButtonText}>Sign In</Text>
-            )}
-          </TouchableOpacity>
-          
-          <View style={styles.footer}>
-            <Text style={styles.footerText}>Don't have an account?</Text>
-            <TouchableOpacity onPress={() => router.push('/sign-up')}>
-              <Text style={styles.signUpLink}>Sign Up</Text>
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity 
+              style={styles.googleButton}
+              onPress={handleGoogleAuth}
+              disabled={isLoading}
+              activeOpacity={0.8}
+            >
+              {isLoading ? (
+                <ActivityIndicator size="small" color={THEME.white} />
+              ) : (
+                <>
+                  <View style={styles.googleIconContainer}>
+                    <Image 
+                      source={require('@/assets/images/google-logo.png')} 
+                      style={styles.googleIcon}
+                    />
+                  </View>
+                  <Text style={styles.googleButtonText}>
+                    Continue with Google
+                  </Text>
+                </>
+              )}
             </TouchableOpacity>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </LinearGradient>
+
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>
+              By continuing, you agree to our{' '}
+              <Text style={styles.footerLink}>Terms of Service</Text> and{' '}
+              <Text style={styles.footerLink}>Privacy Policy</Text>
+            </Text>
+          </View>
+        </View>
+      </LinearGradient>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: THEME.light,
+  },
   gradient: {
     flex: 1,
   },
-  container: {
+  content: {
     flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: SPACING.xl,
   },
-  scrollContainer: {
-    flexGrow: 1,
-    paddingHorizontal: 24,
-    paddingTop: 40,
-    paddingBottom: 40,
-  },
-  logoContainer: {
-    alignItems: 'center',
-    marginBottom: 32,
+  header: {
+    width: '100%',
+    alignItems: "center",
+    marginBottom: SPACING.xl,
   },
   logo: {
-    width: 80,
-    height: 80,
-    marginBottom: 16,
+    width: 90,
+    height: 90,
+    borderRadius: BORDER_RADIUS.lg,
+    marginBottom: SPACING.xl,
+    shadowColor: THEME.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 4,
   },
-  appName: {
-    ...TYPOGRAPHY.headingLarge,
-    color: THEME.primary,
-    marginBottom: 8,
+  title: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: THEME.textPrimary,
+    marginBottom: SPACING.xs,
   },
-  tagline: {
-    ...TYPOGRAPHY.bodyLarge,
+  subtitle: {
+    fontSize: 16,
+    fontWeight: '400',
     color: THEME.textSecondary,
+    marginBottom: SPACING.lg,
+    textAlign: 'center',
   },
   errorContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(244, 67, 54, 0.1)',
     borderRadius: BORDER_RADIUS.md,
-    padding: 12,
-    marginBottom: 16,
+    padding: SPACING.md,
+    marginTop: SPACING.md,
+    width: '100%',
   },
   errorText: {
-    ...TYPOGRAPHY.bodyMedium,
     color: THEME.danger,
-    marginLeft: 8,
+    marginLeft: SPACING.sm,
+    fontSize: 14,
+    flex: 1,
   },
-  inputContainer: {
-    marginBottom: 16,
+  buttonContainer: {
+    width: '100%',
+    alignItems: 'center',
   },
-  label: {
-    ...TYPOGRAPHY.bodyMedium,
-    fontWeight: '500',
-    color: THEME.textPrimary,
-    marginBottom: 8,
-  },
-  inputWrapper: {
+  googleButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: THEME.lightGray,
-    borderRadius: BORDER_RADIUS.md,
-    backgroundColor: THEME.white,
-    paddingHorizontal: 12,
-    ...SHADOWS.small,
-  },
-  inputIcon: {
-    marginRight: 8,
-  },
-  input: {
-    ...TYPOGRAPHY.bodyLarge,
-    flex: 1,
-    paddingVertical: 12,
-    color: THEME.textPrimary,
-  },
-  visibilityToggle: {
-    padding: 8,
-  },
-  signInButton: {
+    justifyContent: 'center',
     backgroundColor: THEME.primary,
     borderRadius: BORDER_RADIUS.md,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 24,
-    ...SHADOWS.small,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.md,
+    width: '100%',
+    height: 56,
+    shadowColor: THEME.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 4,
   },
-  signInButtonDisabled: {
-    backgroundColor: THEME.primaryLight,
-    opacity: 0.7,
-  },
-  signInButtonText: {
-    ...TYPOGRAPHY.button,
-    color: THEME.white,
-  },
-  footer: {
-    flexDirection: 'row',
+  googleIconContainer: {
+    width: 30,
+    height: 30,
+    borderRadius: BORDER_RADIUS.round,
+    backgroundColor: THEME.white,
     justifyContent: 'center',
     alignItems: 'center',
+    marginRight: SPACING.sm,
+  },
+  googleIcon: {
+    width: 20,
+    height: 20,
+  },
+  googleButtonText: {
+    color: THEME.textLight,
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  footer: {
+    position: 'absolute',
+    bottom: 50,
+    width: '100%',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.lg,
   },
   footerText: {
-    ...TYPOGRAPHY.bodyMedium,
+    fontSize: 12,
+    fontWeight: '400',
     color: THEME.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
   },
-  signUpLink: {
-    ...TYPOGRAPHY.bodyMedium,
-    fontWeight: '600',
+  footerLink: {
     color: THEME.primary,
-    marginLeft: 4,
+    fontWeight: '500',
   },
 });

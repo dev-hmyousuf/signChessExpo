@@ -31,17 +31,19 @@ import {
   getFilePreview,
   getPlayersByCountry,
   account,
-  getCurrentSession,
   updateMatch,
-  getPlayerById
+  getPlayerById,
+  createMatch
 } from '@/lib/appwrite';
 import { 
   isDynastyAdmin, 
   canManageDynasty 
 } from '@/lib/permissionsHelper';
-import { Query } from 'appwrite';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import { Query } from 'react-native-appwrite';
+import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import { THEME } from '@/app/utils/theme';
+import { useCompleteUser, useIsLoggedIn } from '@/lib/clerkAuth';
+import { StatusBar } from 'expo-status-bar';
 
 // Define interface for player data
 interface Player {
@@ -55,6 +57,10 @@ interface Player {
   createdAt: string;
   userId: string;
   avatar?: string;
+  avatarUrl?: string;
+  victories?: number;
+  defeats?: number;
+  matches?: string[];
 }
 
 // Define interface for country data
@@ -74,8 +80,18 @@ interface Match {
   round: number;
   status: 'pending_schedule' | 'scheduled' | 'in_progress' | 'completed' | 'rejected';
   scheduledDate?: string;
+  isReviewed?: boolean;
+  isScheduled?: boolean;
   player1?: Player;
   player2?: Player;
+  $collectionId?: string;
+  $databaseId?: string;
+  $createdAt?: string;
+  $updatedAt?: string;
+  $permissions?: string[];
+  predictedWinnerId?: string;
+  predictedWinner?: Player;
+  winProbability?: number;
 }
 
 // Dashboard stats interface
@@ -88,6 +104,13 @@ interface DashboardStats {
   scheduledMatches: number;
   completedMatches: number;
 }
+
+// Calculate win probability based on Elo ratings
+const calculateWinProbability = (rating1: number, rating2: number): number => {
+  const K = 400; // Elo K-factor
+  const expectedScore = 1 / (1 + Math.pow(10, (rating2 - rating1) / K));
+  return Math.round(expectedScore * 100);
+};
 
 export default function DynastyAdminDashboard() {
   const router = useRouter();
@@ -126,9 +149,30 @@ export default function DynastyAdminDashboard() {
     return animationValues[playerId];
   };
 
+  // Check login status with Clerk
+  const { isLoggedIn, isLoading: isLoginCheckLoading } = useIsLoggedIn();
+  
+  // Use our useCompleteUser hook for user data
+  const { clerkUser, appwriteUser, isLoaded, error } = useCompleteUser();
+
   useEffect(() => {
-    checkDynastyAdmin();
-  }, []);
+    // Check login status first
+    if (!isLoginCheckLoading && !isLoggedIn) {
+      console.log('User not logged in, redirecting to login page');
+      router.replace('/(auth)/sign-in');
+      return;
+    }
+
+    // Then check admin status when user data is loaded
+    if (isLoaded) {
+      if (error) {
+        console.error("Authentication error:", error);
+        Alert.alert("Authentication Error", "Please sign out and sign in again to access the dynasty admin dashboard");
+        return;
+      }
+      checkDynastyAdmin();
+    }
+  }, [isLoginCheckLoading, isLoggedIn, isLoaded, clerkUser, appwriteUser, error]);
 
   useEffect(() => {
     // Calculate dashboard stats whenever players or matches change
@@ -162,32 +206,41 @@ export default function DynastyAdminDashboard() {
   // Check if the current user is a dynasty admin and get their dynasty ID
   const checkDynastyAdmin = async () => {
     try {
-      const session = await getCurrentSession();
-      if (!session) {
+      if (!clerkUser || !appwriteUser) {
         Alert.alert("Not Authenticated", "Please log in to access the dynasty admin dashboard");
         router.replace('/');
         return;
       }
 
-      const userData = await account.get();
-      const currentUserId = userData.$id;
+      const currentUserId = clerkUser.id;
       
       // Check if user is a dynasty admin using the helper function
       const { isDynastyAdmin: userIsDynastyAdmin, dynastyId } = await isDynastyAdmin(currentUserId);
       
       if (!userIsDynastyAdmin || !dynastyId) {
-        // User is not a dynasty admin
-        Alert.alert(
-          "Access Denied", 
-          "You don't have permission to access the dynasty admin dashboard",
-          [{ text: "OK", onPress: () => router.replace('/') }]
-        );
-        return;
+        // Also check the role from appwriteUser
+        if (appwriteUser.role === 'dynasty_admin' || appwriteUser.role === 'admin') {
+          console.log("User has dynasty_admin role in Appwrite but not via helper function");
+          // Continue anyway
+        } else {
+          // User is not a dynasty admin
+          Alert.alert(
+            "Access Denied", 
+            "You don't have permission to access the dynasty admin dashboard",
+            [{ text: "OK", onPress: () => router.replace('/') }]
+          );
+          return;
+        }
       }
       
       // Set the dynasty ID and load data
       setAdminDynastyId(dynastyId);
-      await loadDynastyData(dynastyId);
+      if (dynastyId) {
+        await loadDynastyData(dynastyId);
+      } else {
+        console.error("No dynasty ID found for this admin");
+        Alert.alert("Error", "No dynasty assigned to this admin");
+      }
     } catch (error) {
       console.error("Error checking dynasty admin status:", error);
       Alert.alert("Error", "Failed to verify admin status");
@@ -342,12 +395,20 @@ export default function DynastyAdminDashboard() {
 
   // Get player avatar
   const getPlayerAvatar = (player: Player) => {
-    if (player.avatar && player.avatar.startsWith('http')) {
+    // Check if avatarUrl is a Clerk URL (already a full URL)
+    if (player.avatarUrl && player.avatarUrl.startsWith('http')) {
+      return { uri: player.avatarUrl };
+    } 
+    // Check for legacy avatar field
+    else if (player.avatar && player.avatar.startsWith('http')) {
       return { uri: player.avatar };
-    } else if (player.avatar) {
+    } 
+    // If it's an Appwrite file ID, use getFilePreview
+    else if (player.avatar) {
       return { uri: getFilePreview(player.avatar).toString() };
-    } else {
-      // Use country flag as fallback
+    } 
+    // Fallback to country flag
+    else {
       return { uri: getFlagUrl(dynastyInfo?.flag || 'xx') };
     }
   };
@@ -418,6 +479,8 @@ export default function DynastyAdminDashboard() {
     });
     
     return (
+      <>
+      <StatusBar style="light" />
       <Animated.View 
         style={[
           stylesDynasty.playerCard,
@@ -537,6 +600,7 @@ export default function DynastyAdminDashboard() {
           )}
         </Animated.View>
       </Animated.View>
+      </>
     );
   };
 
@@ -635,13 +699,8 @@ export default function DynastyAdminDashboard() {
 
   // Check if match can be rescheduled
   const canRescheduleMatch = (match: Match) => {
-    // If no date is set, always allow scheduling
-    if (!match.scheduledDate) return true;
-    
-    // If date is set, check if match hasn't started
-    const matchStartTime = new Date(match.scheduledDate);
-    const now = new Date();
-    return now < matchStartTime;
+    // Always allow rescheduling regardless of match date
+    return true;
   };
 
   // Handle match update
@@ -651,9 +710,10 @@ export default function DynastyAdminDashboard() {
     try {
       setLoading(true);
       
-      // Update match data
+      // Update match data - make sure to set isScheduled to true and status to 'scheduled'
       await updateMatch(selectedMatch.$id, {
-        status: selectedMatchStatus,
+        status: 'scheduled', // Always set status to 'scheduled' when scheduling
+        isScheduled: true,   // Set isScheduled to true
         scheduledDate: scheduledDate.toISOString()
       });
       
@@ -700,16 +760,45 @@ export default function DynastyAdminDashboard() {
     }
   };
 
+  // Handle match review with confirmation dialog
+  const handleReviewMatch = (match: Match) => {
+    Alert.alert(
+      'Mark Match as Reviewed',
+      'Once you mark a match as reviewed, it confirms that all match details have been verified by you. This action cannot be undone.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        },
+        {
+          text: 'Mark as Reviewed',
+          style: 'default',
+          onPress: async () => {
+            try {
+              setLoading(true);
+              await updateMatch(match.$id, {
+                isReviewed: true
+              });
+              Alert.alert(
+                'Success',
+                'Match has been marked as reviewed',
+                [{ text: 'OK' }]
+              );
+              fetchMatches();
+            } catch (error) {
+              console.error('Failed to review match:', error);
+              Alert.alert('Error', 'Failed to review match. Please try again.');
+            } finally {
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   // Handle edit match button
   const handleEditMatch = (match: Match) => {
-    if (!canRescheduleMatch(match)) {
-      Alert.alert(
-        'Cannot Edit',
-        'This match has already started and cannot be rescheduled.'
-      );
-      return;
-    }
-
     setSelectedMatch(match);
     // If no date is set, use January 1st, 2026 as default
     if (match.scheduledDate) {
@@ -725,14 +814,65 @@ export default function DynastyAdminDashboard() {
   const fetchMatches = async () => {
     try {
       setLoading(true);
-      const response = await databases.listDocuments(
+      // First get all matches for this tournament
+      const matchesResponse = await databases.listDocuments(
         APPWRITE_DATABASE_ID,
         COLLECTION_MATCHES,
         [
-          Query.equal('tournamentId', adminDynastyId || '')
+          Query.equal('tournamentId', adminDynastyId || ''),
+          Query.limit(100)
         ]
       );
-      setMatches(response.documents as unknown as Match[]);
+      const matchesData = matchesResponse.documents;
+      // Get all unique player IDs from matches
+      const playerIds = new Set<string>();
+      matchesData.forEach(match => {
+        if (match.player1Id) playerIds.add(match.player1Id);
+        if (match.player2Id) playerIds.add(match.player2Id);
+      });
+      // Fetch all players in parallel, using correct field
+      const playerPromises = Array.from(playerIds).map(async id => {
+        if (id.startsWith('user_')) {
+          // Fetch by clerkId
+          const res = await databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            COLLECTION_PLAYERS,
+            [Query.equal('clerkId', id), Query.limit(1)]
+          );
+          return res.documents[0] ? res.documents[0] as unknown as Player : null;
+        } else {
+          // Fetch by $id
+          try {
+            const player = await getPlayerById(id);
+            return player as unknown as Player;
+          } catch {
+            return null;
+          }
+        }
+      });
+      const playerResults = await Promise.all(playerPromises);
+      // Create a map of player data
+      const playersMap: Record<string, Player> = {};
+      Array.from(playerIds).forEach((id, idx) => {
+        if (playerResults[idx]) {
+          playersMap[id] = playerResults[idx]!;
+        }
+      });
+      // Enrich matches with player data, skip if missing
+      const enrichedMatches = matchesData.map(match => ({
+        ...match,
+        player1: playersMap[match.player1Id],
+        player2: playersMap[match.player2Id],
+        player1Id: match.player1Id,
+        player2Id: match.player2Id,
+        tournamentId: match.tournamentId,
+        round: match.round,
+        status: match.status,
+        isReviewed: match.isReviewed,
+        isScheduled: match.isScheduled,
+        scheduledDate: match.scheduledDate
+      })) as Match[];
+      setMatches(enrichedMatches);
     } catch (error) {
       console.error('Error fetching matches:', error);
       Alert.alert('Error', 'Failed to load matches');
@@ -742,15 +882,14 @@ export default function DynastyAdminDashboard() {
     }
   };
 
-  // Handle date change
-  const onDateChange = (event: any, selectedDate?: Date) => {
-    setShowDatePicker(Platform.OS === 'ios');
-    if (selectedDate) {
-      setScheduledDate(selectedDate);
-    } else {
-      // If no date selected, set to January 1st, 2026
-      setScheduledDate(new Date('2026-01-01T00:00:00'));
-    }
+  // Handle date change with the modal picker
+  const onDateConfirm = (selectedDate: Date) => {
+    setScheduledDate(selectedDate);
+    setShowDatePicker(false);
+  };
+  
+  const onDateCancel = () => {
+    setShowDatePicker(false);
   };
 
   // Render match card with improved design
@@ -779,6 +918,16 @@ export default function DynastyAdminDashboard() {
               ).join(' ')}
             </Text>
             <Text style={stylesDynasty.matchDate}>{formattedDate}</Text>
+            {match.isReviewed !== undefined && (
+              <View style={[
+                stylesDynasty.reviewStatusBadge,
+                { backgroundColor: match.isReviewed ? '#10b981' : '#f59e0b' }
+              ]}>
+                <Text style={stylesDynasty.reviewStatusText}>
+                  {match.isReviewed ? 'Reviewed' : 'Not Reviewed'}
+                </Text>
+              </View>
+            )}
           </View>
           
           <Text style={stylesDynasty.roundText}>Round {match.round}</Text>
@@ -843,6 +992,7 @@ export default function DynastyAdminDashboard() {
             </>
           )}
           
+          {/* Show Reschedule button for all scheduled matches */}
           {match.status === 'scheduled' && (
             <TouchableOpacity
               style={[stylesDynasty.actionButton, stylesDynasty.rescheduleButton]}
@@ -850,6 +1000,17 @@ export default function DynastyAdminDashboard() {
             >
               <Ionicons name="calendar" size={18} color="#FFFFFF" />
               <Text style={stylesDynasty.actionButtonText}>Reschedule Match</Text>
+            </TouchableOpacity>
+          )}
+          
+          {/* Show Mark as Reviewed button for unreviewed matches */}
+          {match.status === 'scheduled' && match.isReviewed === false && (
+            <TouchableOpacity
+              style={[stylesDynasty.actionButton, { backgroundColor: '#10b981' }]}
+              onPress={() => handleReviewMatch(match)}
+            >
+              <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
+              <Text style={stylesDynasty.actionButtonText}>Mark as Reviewed</Text>
             </TouchableOpacity>
           )}
           
@@ -1055,6 +1216,91 @@ export default function DynastyAdminDashboard() {
         )}
       </ScrollView>
     );
+  };
+
+  // Generate tournament matches with proper seeding
+  const generateMatches = async () => {
+    if (!adminDynastyId) {
+      Alert.alert("Error", "No dynasty ID available");
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      // Get approved players only
+      const approvedPlayers = players.filter(p => p.status === 'approved');
+      
+      if (approvedPlayers.length < 2) {
+        Alert.alert("Error", "Need at least 2 approved players to generate matches");
+        setLoading(false);
+        return;
+      }
+      
+      // Sort players by rating (descending)
+      const sortedPlayers = [...approvedPlayers].sort((a, b) => b.rating - a.rating);
+      
+      // For a proper tournament seeding, match highest vs lowest
+      const newMatches = [];
+      
+      for (let i = 0; i < Math.floor(sortedPlayers.length / 2); i++) {
+        // Pair 1st with last, 2nd with second-last, etc.
+        const player1 = sortedPlayers[i];
+        const player2 = sortedPlayers[sortedPlayers.length - 1 - i];
+        
+        // Calculate win probability
+        const winProbability = calculateWinProbability(player1.rating, player2.rating);
+        const predictedWinnerId = player1.rating > player2.rating ? player1.$id : player2.$id;
+        
+        try {
+          // Create match in Appwrite with isScheduled false and scheduledDate undefined
+          const matchData = {
+            player1Id: player1.$id,
+            player2Id: player2.$id,
+            tournamentId: adminDynastyId,
+            round: 1,
+            status: 'pending_schedule',
+            isScheduled: false, // Explicitly set to false
+            scheduledDate: undefined, // Use undefined instead of null
+            predictedWinnerId: predictedWinnerId,
+            winProbability: winProbability
+          };
+          
+          const savedMatch = await createMatch(matchData);
+          
+          // Add to our matches array
+          newMatches.push({
+            ...savedMatch,
+            player1,
+            player2,
+            predictedWinnerId,
+            predictedWinner: player1.rating > player2.rating ? player1 : player2,
+            winProbability
+          } as unknown as Match);
+          
+        } catch (error) {
+          console.error("Error creating match:", error);
+          Alert.alert("Error", `Failed to create match between ${player1.name} and ${player2.name}`);
+        }
+      }
+      
+      // If we have an odd number of players, the highest seed gets a bye
+      if (sortedPlayers.length % 2 !== 0 && sortedPlayers.length > 0) {
+        console.log(`Player ${sortedPlayers[Math.floor(sortedPlayers.length / 2)].name} has a bye to round 2`);
+      }
+      
+      Alert.alert(
+        "Success",
+        `Generated ${newMatches.length} matches`,
+        [{ text: "OK", onPress: () => loadDynastyData(adminDynastyId) }]
+      );
+      
+    } catch (error) {
+      console.error("Error generating matches:", error);
+      Alert.alert("Error", "Failed to generate matches");
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (loading) {
@@ -1279,7 +1525,9 @@ export default function DynastyAdminDashboard() {
         <View style={stylesDynasty.modalOverlay}>
           <View style={stylesDynasty.modalContent}>
             <View style={stylesDynasty.modalHeader}>
-              <Text style={stylesDynasty.modalHeaderTitle}>Reschedule Match</Text>
+              <Text style={stylesDynasty.modalHeaderTitle}>
+                Schedule Match
+              </Text>
               <TouchableOpacity
                 onPress={() => setEditModalVisible(false)}
                 style={stylesDynasty.closeButton}
@@ -1343,15 +1591,14 @@ export default function DynastyAdminDashboard() {
                   </Text>
                 </TouchableOpacity>
                 
-                {showDatePicker && (
-                  <DateTimePicker
-                    value={scheduledDate}
-                    mode="datetime"
-                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                    onChange={onDateChange}
-                    minimumDate={new Date()} // Prevent scheduling in the past
-                  />
-                )}
+                <DateTimePickerModal
+                  isVisible={showDatePicker}
+                  mode="datetime"
+                  onConfirm={onDateConfirm}
+                  onCancel={onDateCancel}
+                  date={scheduledDate}
+                  minimumDate={new Date()}
+                />
               </View>
               
               <View style={stylesDynasty.modalActions}>
@@ -2040,6 +2287,22 @@ const stylesDynasty = {
     },
     expandedContentContainer: {
       overflow: 'hidden',
+    },
+  }),
+  
+  // Adding reviewStatusBadge styles
+  ...StyleSheet.create({
+    reviewStatusBadge: {
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 16,
+      marginTop: 6,
+      alignSelf: 'flex-start',
+    },
+    reviewStatusText: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: '#FFFFFF',
     },
   }),
 };

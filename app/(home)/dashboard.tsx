@@ -28,7 +28,7 @@ import {
   updateMatch,
   getPlayerById
 } from '@/lib/appwrite';
-import { Query } from 'appwrite';
+import { Query } from 'react-native-appwrite';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import AdminRolesPage from '@/app/components/admin-roles';
 import { THEME, TYPOGRAPHY, BORDER_RADIUS, SHADOWS, SPACING } from '@/app/utils/theme';
@@ -57,6 +57,7 @@ interface Player {
   createdAt: string;
   userId: string;
   avatar?: string;
+  avatarUrl?: string;
 }
 
 interface Match {
@@ -203,20 +204,37 @@ export default function AdminDashboard() {
         if (match.player2Id) playerIds.add(match.player2Id);
       });
       
-      // Fetch all players in parallel
-      const playerPromises = Array.from(playerIds).map(id => getPlayerById(id));
-      const playerResults = await Promise.allSettled(playerPromises);
+      // Fetch all players in parallel, using correct field
+      const playerPromises = Array.from(playerIds).map(async id => {
+        if (id.startsWith('user_')) {
+          // Fetch by clerkId
+          const res = await databases.listDocuments(
+            APPWRITE_DATABASE_ID,
+            COLLECTION_PLAYERS,
+            [Query.equal('clerkId', id), Query.limit(1)]
+          );
+          return res.documents[0] ? res.documents[0] as unknown as Player : null;
+        } else {
+          // Fetch by $id
+          try {
+            const player = await getPlayerById(id);
+            return player as unknown as Player;
+          } catch {
+            return null;
+          }
+        }
+      });
+      const playerResults = await Promise.all(playerPromises);
       
       // Create a map of player data
       const players: { [key: string]: Player } = {};
-      playerResults.forEach((result, index) => {
-        if (result.status === 'fulfilled' && result.value) {
-          const playerId = Array.from(playerIds)[index];
-          players[playerId] = result.value as Player;
+      Array.from(playerIds).forEach((id, idx) => {
+        if (playerResults[idx]) {
+          players[id] = playerResults[idx]!;
         }
       });
       
-      // Enrich matches with player data
+      // Enrich matches with player data, skip if missing
       const enrichedMatches = matchesData.map(match => ({
         ...match,
         player1: players[match.player1Id],
@@ -333,9 +351,16 @@ export default function AdminDashboard() {
   };
 
   const getPlayerAvatar = useCallback((player: Player) => {
-    if (player?.avatar) {
+    // Check if avatarUrl is a Clerk URL (already a full URL)
+    if (player?.avatarUrl && player.avatarUrl.startsWith('http')) {
+      return player.avatarUrl;
+    }
+    // Check for legacy avatar field
+    else if (player?.avatar) {
+      // If it's an Appwrite file ID, use getFilePreview
       return getFilePreview(player.avatar).toString();
     }
+    // Fallback to a generated avatar
     return `https://ui-avatars.com/api/?name=${encodeURIComponent(player?.name || 'Player')}&background=random`;
   }, []);
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Image,
@@ -11,347 +11,160 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Dimensions,
 } from 'react-native';
 import { router } from 'expo-router';
 import { Button } from '@/app/components/Button';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons, Feather, FontAwesome5 } from '@expo/vector-icons';
 import { 
-  account, 
-  logout, 
-  getCurrentSession, 
   getPlayerById, 
   getPlayerByUserId,
   updateUserProfile,
-  createDocumentWithPermissions,
   COLLECTION_PLAYERS,
-  storage,
-  ID,
-  createNameChangeRequest,
-  STORAGE_BUCKET_ID,
-  verifyStorageBucket,
-  APPWRITE_PROJECT_ID,
-  APPWRITE_ENDPOINT,
-  uploadImageBase64,
-  uploadProfileImageFromUri,
-  getFileUrl
+  APPWRITE_DATABASE_ID
 } from '@/lib/appwrite';
-import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { THEME } from '@/app/utils/theme';
-import { downloadFileFromAnyBucket, migrateFile, LEGACY_BUCKET_IDS } from '@/app/utils/fileMigration';
+import { THEME, BORDER_RADIUS, SPACING } from '@/app/utils/theme';
 import Animated, { 
   FadeIn, 
+  FadeInDown,
   FadeInUp, 
   useSharedValue, 
   useAnimatedStyle, 
   withSpring, 
-  withTiming 
+  withTiming,
+  Easing,
+  SlideInUp
 } from 'react-native-reanimated';
-// Import custom image server utilities
-import { uploadProfileImage as uploadServerProfileImage, isServerAvailable } from '@/app/utils/imageServer';
+import { useAuth } from '@clerk/clerk-expo';
+import { useCompleteUser } from '@/lib/clerkAuth';
+import { LinearGradient } from 'expo-linear-gradient';
 
+const { width } = Dimensions.get('window');
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
+const AnimatedLinearGradient = Animated.createAnimatedComponent(LinearGradient);
 
 export default function ProfilePage() {
   const [isLoaded, setIsLoaded] = useState(false);
-  const [user, setUser] = useState<any>(null);
   const [playerData, setPlayerData] = useState<any>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [fullName, setFullName] = useState('');
-  const [originalName, setOriginalName] = useState(''); // To track name changes
-  const [username, setUsername] = useState('');
   const [bio, setBio] = useState('');
-  const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [isNameChangeRequested, setIsNameChangeRequested] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  const [migrationNotice, setMigrationNotice] = useState<string | null>(null);
-  const [isServerMode, setIsServerMode] = useState(false);
+
+  // Clerk and Appwrite user data
+  const { clerkUser, appwriteUser, isLoaded: isUserLoaded, isSignedIn } = useCompleteUser();
+  const { signOut } = useAuth();
 
   // Animation values
-  const profileOpacity = useSharedValue(0);
+  const headerOpacity = useSharedValue(0);
+  const contentOpacity = useSharedValue(0);
   const avatarScale = useSharedValue(0.8);
+  const infoCardTranslateY = useSharedValue(50);
+  const actionButtonsTranslateY = useSharedValue(30);
+  const slideAnim = useSharedValue(40);
+  const fadeAnim = useSharedValue(0);
 
   useEffect(() => {
-    const loadUser = async () => {
+    const loadUserData = async () => {
       try {
-        const session = await getCurrentSession();
-        if (session) {
-          const userData = await account.get();
-          setUser(userData);
-          
-          // Set initial values from user account
-          setFullName(userData.name);
-          setOriginalName(userData.name);
-          setUsername(userData.name.replace(/\s+/g, '').toLowerCase()); // Default username from name
-          
-          // Check if user has avatar from authentication
-          if (userData.prefs?.avatarUrl) {
-            setAvatarUri(userData.prefs.avatarUrl);
+        if (!isUserLoaded || !isSignedIn || !clerkUser) {
+          return;
+        }
+        
+        // Try to get player profile
+        try {
+          const player = await getPlayerByUserId(clerkUser.id);
+          if (player) {
+            setPlayerData(player);
+            setBio(player.bio || '');
+          } else {
+            console.log("No player profile found");
           }
-
-          // Try to get player profile by userId instead of doc ID
-          try {
-            const player = await getPlayerByUserId(userData.$id);
-            if (player) {
-              setPlayerData(player);
-              setFullName(player.name || userData.name);
-              setOriginalName(player.name || userData.name);
-              setUsername(player.username || userData.name.replace(/\s+/g, '').toLowerCase());
-              setBio(player.bio || '');
-              
-              // If player has avatar, load it properly
-              if (player.avatar) {
-                const imageUrl = await loadProfileImage(player.avatar);
-                if (imageUrl) {
-                  setAvatarUri(imageUrl);
-                } else {
-                  // If we can't load the image, use a random avatar
-                  setAvatarUri(generateRandomAvatarUrl(player.name || userData.name));
-                }
-              }
-            } else {
-              console.log("No player profile found, using account data");
-            }
-          } catch (error) {
-            console.log("Error fetching player profile, using account data:", error);
-          }
-
-          // Check if custom server is available
-          try {
-            const serverAvailable = await isServerAvailable();
-            setIsServerMode(serverAvailable);
-            console.log("Custom image server available:", serverAvailable);
-          } catch (error) {
-            console.log("Error checking server availability:", error);
-            setIsServerMode(false);
-          }
+        } catch (error) {
+          console.log("Error fetching player profile:", error);
         }
       } catch (error) {
         console.error("Failed to load user data:", error);
       } finally {
         setIsLoaded(true);
-        // Animate in the profile
-        profileOpacity.value = withTiming(1, { duration: 800 });
-        avatarScale.value = withSpring(1);
+        
+        // Sequenced animations
+        headerOpacity.value = withTiming(1, { duration: 800, easing: Easing.out(Easing.cubic) });
+        fadeAnim.value = withTiming(1, { duration: 800 });
+        
+        setTimeout(() => {
+          avatarScale.value = withSpring(1, { damping: 12, stiffness: 100 });
+        }, 200);
+        
+        setTimeout(() => {
+          infoCardTranslateY.value = withTiming(0, { duration: 600, easing: Easing.out(Easing.cubic) });
+          contentOpacity.value = withTiming(1, { duration: 800 });
+          slideAnim.value = withTiming(0, { duration: 600, easing: Easing.out(Easing.cubic) });
+        }, 400);
+        
+        setTimeout(() => {
+          actionButtonsTranslateY.value = withTiming(0, { duration: 600, easing: Easing.out(Easing.cubic) });
+        }, 600);
       }
     };
 
-    loadUser();
-  }, []);
+    loadUserData();
+  }, [isUserLoaded, isSignedIn, clerkUser]);
 
   // Animation styles
-  const profileAnimatedStyle = useAnimatedStyle(() => {
-    return {
-      opacity: profileOpacity.value,
-    };
-  });
+  const headerAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: headerOpacity.value,
+  }));
 
-  const avatarAnimatedStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { scale: avatarScale.value }
-      ]
-    };
-  });
+  const contentAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: contentOpacity.value,
+  }));
 
-  const pickImage = async () => {
-    try {
-      // Request permission to access media library
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      
-      if (status !== 'granted') {
-        Alert.alert('Permission Required', 'We need access to your photo library to set a profile picture');
-        return;
-      }
-      
-      // Open image picker
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-      
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        setIsUploading(true);
-        
-        // Show a temporary local preview while uploading
-        const selectedImageUri = result.assets[0].uri;
-        setAvatarUri(selectedImageUri);
-        
-        try {
-          console.log("Starting avatar upload process...");
-          
-          // Determine whether to use custom server or Appwrite
-          let imageUrl;
-          
-          if (isServerMode) {
-            // Use custom image server
-            console.log("Using custom image server for upload");
-            imageUrl = await uploadServerProfileImage(selectedImageUri);
-            
-            if (!imageUrl) {
-              throw new Error("Custom server upload failed");
-            }
-            
-            console.log("Custom server upload successful:", imageUrl);
-          } else {
-            // Use Appwrite storage as fallback
-            console.log("Using Appwrite storage for upload (server not available)");
-            
-            // Check if storage bucket is accessible
-            const isBucketValid = await verifyStorageBucket();
-            if (!isBucketValid) {
-              throw new Error("Storage bucket not accessible");
-            }
-            
-            // Try the base64 upload approach first (most reliable for React Native)
-            let fileId;
-            try {
-              console.log("Attempting Base64 upload to Appwrite...");
-              fileId = await uploadImageBase64(selectedImageUri);
-            } catch (base64Error) {
-              console.error("Base64 upload failed:", base64Error);
-              console.log("Falling back to standard upload method...");
-              fileId = await uploadProfileImageFromUri(selectedImageUri);
-            }
-            
-            if (!fileId) {
-              throw new Error("Appwrite upload failed - no file ID returned");
-            }
-            
-            console.log("File uploaded to Appwrite with ID:", fileId);
-            
-            // Get the preview URL for display
-            imageUrl = getFileUrl(fileId);
-          }
-          
-          // Update the avatar URI state
-          setAvatarUri(imageUrl);
-          console.log("Avatar preview URL set:", imageUrl);
-          
-          // Update the profile data with the new avatar
-          if (playerData) {
-            await updateUserProfile(playerData.$id, {
-              avatar: imageUrl // Store full URL instead of just fileId
-            });
-            console.log("Player profile updated with new avatar URL");
-            Alert.alert("Success", "Profile picture updated successfully");
-          } else {
-            // If we don't have player data yet, we'll update it when saving the profile
-            console.log("No player data to update yet, will save avatar with profile");
-            Alert.alert("Success", "Profile picture will be saved with your profile");
-          }
-        } catch (error) {
-          console.error("Avatar upload failed:", error);
-          Alert.alert(
-            "Upload Failed", 
-            "We couldn't upload your profile picture. Please try again later.",
-            [
-              { text: "Cancel", style: "cancel" },
-              { text: "Try Again", onPress: pickImage }
-            ]
-          );
-        } finally {
-          setIsUploading(false);
-        }
-      }
-    } catch (error) {
-      console.error("Error with image picker:", error);
-      setIsUploading(false);
-      
-      // Provide fallback options
-      Alert.alert(
-        "Profile Photo",
-        "There was a problem selecting your photo. Would you like to use an alternative?",
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: "Use Random Avatar", onPress: generateRandomAvatar },
-          { text: "Try Again", onPress: pickImage }
-        ]
-      );
-    }
-  };
+  const avatarAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: avatarScale.value }]
+  }));
 
-  const generateRandomAvatar = () => {
-    // Generate a random avatar using ui-avatars API with a random background
-    const randomColor = Math.floor(Math.random()*16777215).toString(16);
-    const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(fullName)}&background=${randomColor}&color=fff`;
-    setAvatarUri(avatarUrl);
-  };
+  const infoCardAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: infoCardTranslateY.value }],
+    opacity: contentOpacity.value,
+  }));
 
-  const handleNameChange = async (newName: string, oldName: string) => {
-    if (isNameChangeRequested) return;
-    
-    try {
-      setIsNameChangeRequested(true);
-      
-      if (playerData) {
-        // Create a name change request
-        await createNameChangeRequest(playerData.$id, oldName, newName);
-        console.log(`Name change request created: ${oldName} → ${newName}`);
-        
-        // Update UI to reflect pending status
-        Alert.alert(
-          "Name Change Requested", 
-          "Your name change has been requested and is pending approval. It may take some time to be processed."
-        );
-      }
-    } catch (error) {
-      console.error("Failed to request name change:", error);
-      Alert.alert("Error", "Failed to request name change. Please try again later.");
-    } finally {
-      setIsNameChangeRequested(false);
-    }
-  };
+  const actionButtonsAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: actionButtonsTranslateY.value }],
+    opacity: contentOpacity.value,
+  }));
+
+  const fadeInAnimStyle = useAnimatedStyle(() => ({
+    opacity: fadeAnim.value,
+  }));
+
+  const slideAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: slideAnim.value }],
+    opacity: fadeAnim.value,
+  }));
 
   const saveChanges = async () => {
-    if (isSaving) return;
-    
+    if (!playerData || !clerkUser) return;
+
     setIsSaving(true);
     
     try {
-      // Create or update player profile
-      const playerProfileData = {
-        name: fullName,
-        username: username,
-        bio: bio || '',
-        userId: user.$id, // Link to the Appwrite user ID
-        avatar: avatarUri, // Store the avatar URL directly instead of just file ID
-        countryId: playerData?.countryId || '', // Include the required countryId field
-        status: playerData?.status || 'pending',
-        rating: playerData?.rating || 1200,
-        createdAt: playerData?.createdAt || new Date().toISOString(), // Add the required createdAt field
-      };
+      // Only update the bio, since the name and avatar should come from Clerk
+      await updateUserProfile(playerData.$id, {
+        bio: bio,
+      });
       
-      // If we're updating an existing profile
-      if (playerData) {
-        await updateUserProfile(playerData.$id, playerProfileData);
-        console.log("Profile updated successfully");
-        
-        // Check if name was changed
-        if (fullName !== originalName) {
-          await handleNameChange(fullName, originalName);
-        }
-      } else {
-        // Create new player profile
-        const newPlayer = await createDocumentWithPermissions(
-          COLLECTION_PLAYERS,
-          playerProfileData,
-          user.$id // Pass user ID to set appropriate permissions
-        );
-        
-        console.log("New player profile created:", newPlayer.$id);
-        setPlayerData(newPlayer);
-        setOriginalName(fullName); // Set original name after creation
-      }
-
-      Alert.alert("Success", "Profile updated successfully");
+      // Update the player data
+      setPlayerData({
+        ...playerData,
+        bio: bio,
+      });
+      
       setIsEditing(false);
+      Alert.alert("Profile Updated", "Your profile has been updated successfully.");
     } catch (error) {
       console.error("Failed to update profile:", error);
-      Alert.alert("Error", "Failed to update profile");
+      Alert.alert("Update Failed", "There was a problem updating your profile. Please try again.");
     } finally {
       setIsSaving(false);
     }
@@ -359,588 +172,862 @@ export default function ProfilePage() {
 
   const handleSignOut = async () => {
     try {
-      const success = await logout();
-      if (success) {
-        router.replace('/');
-      } else {
-        Alert.alert("Error", "Failed to sign out. Please try again.");
-      }
+      await signOut();
+      router.replace('/(auth)/sign-in');
     } catch (error) {
-      console.error("Sign out error:", error);
-      Alert.alert("Error", "An unexpected error occurred while signing out.");
+      console.error("Error signing out:", error);
+      Alert.alert("Error", "Failed to sign out. Please try again.");
     }
   };
 
-  // Add a function to handle profile image loading with error handling
-  const loadProfileImage = async (avatarId: string) => {
-    if (!avatarId) return null;
-    
-    // If it's already a full URL (from custom server), return it directly
-    if (avatarId.startsWith('http')) {
-      return avatarId;
-    }
-    
-    try {
-      // Get the file URL and set the avatar URI
-      console.log(`Loading profile image with ID: ${avatarId}`);
-      
-      // Try to get a direct file URL first
-      const avatarUrl = getFileUrl(avatarId);
-      console.log(`Using direct avatar URL: ${avatarUrl}`);
-      
-      // Check if the URL is accessible with a head request
-      try {
-        const headResponse = await fetch(avatarUrl, { method: 'HEAD' });
-        if (headResponse.ok) {
-          return avatarUrl;
-        } else {
-          console.error(`Direct URL returned ${headResponse.status}`);
-        }
-      } catch (headError) {
-        console.error('Error checking direct URL:', headError);
-      }
-      
-      // If direct file access fails, try migration
-      console.log(`Attempting to migrate file from legacy buckets...`);
-      
-      try {
-        // Try to migrate the file
-        const newFileId = await migrateFile(avatarId);
-        
-        if (newFileId) {
-          console.log(`File migrated successfully to ${newFileId}`);
-          
-          // Update the player's avatar ID to the new file ID
-          if (playerData) {
-            await updateUserProfile(playerData.$id, {
-              avatar: newFileId
-            });
-            console.log(`Player profile updated with new avatar ID: ${newFileId}`);
-            
-            // Show migration notice
-            setMigrationNotice(`Your profile image was automatically migrated to a new storage location (ID: ${newFileId.substring(0, 8)}...)`);
-            
-            // Clear the notice after 5 seconds
-            setTimeout(() => {
-              setMigrationNotice(null);
-            }, 5000);
-          }
-          
-          // Return the URL for the new file
-          return getFileUrl(newFileId);
-        }
-      } catch (migrationError) {
-        console.error(`File migration failed:`, migrationError);
-      }
-      
-      // Try legacy buckets directly
-      for (const bucketId of LEGACY_BUCKET_IDS) {
-        try {
-          const legacyUrl = `${APPWRITE_ENDPOINT}/storage/buckets/${bucketId}/files/${avatarId}/view?project=${APPWRITE_PROJECT_ID}`;
-          console.log(`Trying legacy bucket URL: ${legacyUrl}`);
-          
-          const legacyResponse = await fetch(legacyUrl, { method: 'HEAD' });
-          if (legacyResponse.ok) {
-            console.log(`Legacy URL is accessible`);
-            return legacyUrl;
-          }
-        } catch (legacyError) {
-          console.log(`Legacy bucket ${bucketId} error:`, legacyError);
-        }
-      }
-      
-      // As a last resort, use a random avatar
-      console.log(`Using random avatar as fallback`);
-      return generateRandomAvatarUrl(fullName);
-      
-    } catch (error) {
-      console.error(`Error loading profile image:`, error);
-      return null;
-    }
-  };
-
-  // Generate a consistent random avatar URL based on name
-  const generateRandomAvatarUrl = (name: string) => {
-    // Generate a consistent random color based on the name
-    const hash = name.split('').reduce((acc, char) => char.charCodeAt(0) + acc, 0);
-    const randomColor = Math.abs(hash).toString(16).substring(0, 6).padEnd(6, '0');
-    
-    // Use UI Avatars service to generate a nice avatar
-    const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=${randomColor}&color=fff&size=256`;
-    return avatarUrl;
-  };
-
-  if (!isLoaded) {
+  // If not loaded, show loading state
+  if (!isLoaded || !isUserLoaded) {
     return (
-      <View style={styles.centeredContainer}>
-        <ActivityIndicator size="large" color="#000" />
-      </View>
+      <SafeAreaView style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={THEME.primary} />
+      </SafeAreaView>
     );
   }
 
-  if (!user) {
+  // If no user is found, show error
+  if (!clerkUser) {
     return (
-      <View style={styles.centeredContainer}>
-        <Text style={styles.noUserText}>No user data found.</Text>
-        <Button label="Go to Login" onPress={() => router.replace('/')} />
-      </View>
+      <SafeAreaView style={styles.errorContainer}>
+        <Text style={styles.errorText}>Please sign in to view your profile</Text>
+        <Button label="Go to Sign In" onPress={() => router.replace('/(auth)/sign-in')} />
+      </SafeAreaView>
     );
   }
+
+  const playerStatus = playerData ? (
+                  playerData.status === 'approved' 
+                    ? 'Approved Player' 
+                    : playerData.status === 'pending' 
+                      ? 'Pending Approval'
+                      : 'User'
+  ) : 'User';
+
+  // Determine which role badge colors to use
+  const getRoleColors = () => {
+    if (!playerData) return ['#FF8C3D', THEME.primary] as const;
+    
+    const role = playerData.role || 'user';
+    switch(role) {
+      case 'organizer':
+        return ['#4F46E5', '#7C3AED'] as const;
+      case 'dynasty_admin':
+        return ['#10B981', '#059669'] as const;
+      case 'admin':
+        return ['#4F46E5', '#7C3AED'] as const;
+      case 'moderator':
+        return ['#0EA5E9', '#0284C7'] as const;
+      case 'player':
+        return ['#F59E0B', '#D97706'] as const;
+      default:
+        return [THEME.primary, '#FF8C3D'] as const;
+    }
+  };
+
+  // Get role icon name
+  const getRoleIcon = () => {
+    if (!playerData) return 'person';
+    
+    const role = playerData.role || 'user';
+    switch(role) {
+      case 'organizer':
+        return 'shield';
+      case 'dynasty_admin':
+        return 'flag';
+      case 'admin':
+        return 'shield';
+      case 'moderator':
+        return 'shield-half';
+      case 'player':
+        return 'trophy';
+      default:
+        return 'person';
+    }
+  };
+
+  // Format role display text
+  const getRoleText = () => {
+    if (!playerData) return 'User';
+    
+    const role = playerData.role || 'user';
+    switch(role) {
+      case 'organizer':
+        return 'Organizer';
+      case 'dynasty_admin':
+        return playerData.countryName ? `Dynasty Admin ${playerData.countryFlag} ${playerData.countryName}` : 'Dynasty Admin';
+      case 'admin':
+        return 'Administrator';
+      case 'moderator':
+        return 'Moderator';
+      case 'player':
+        return 'Player';
+      default:
+        return 'User';
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardAvoidView}
+      <ScrollView 
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
       >
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-          {!isLoaded ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color={THEME.primary} />
-              <Text style={styles.loadingText}>Loading profile...</Text>
-            </View>
-          ) : (
-            <Animated.View style={[styles.profileContainer, profileAnimatedStyle]}>
-              <View style={styles.headerContainer}>
-                <AnimatedTouchable
-                  style={styles.backButton}
-                  onPress={() => router.back()}
-                  entering={FadeIn.delay(200)}
+        {/* Animated Header with Gradient */}
+        <AnimatedLinearGradient
+          colors={getRoleColors()}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[styles.headerBackground, headerAnimatedStyle]}
+        >
+          {/* Decorative Elements */}
+          <View style={styles.decorCircle1} />
+          <View style={styles.decorCircle2} />
+          
+          <TouchableOpacity 
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <Ionicons name="arrow-back" size={24} color="white" />
+            <Text style={styles.backButtonText}>Back</Text>
+          </TouchableOpacity>
+          
+          {/* Edit Button */}
+          {playerData && (
+            <TouchableOpacity
+              style={styles.editButton}
+              onPress={() => setIsEditing(!isEditing)}
+              activeOpacity={0.8}
+            >
+              <LinearGradient
+                colors={['rgba(255,255,255,0.3)', 'rgba(255,255,255,0.1)']}
+                style={styles.editButtonGradient}
+              >
+                <Ionicons 
+                  name={isEditing ? "close" : "pencil"} 
+                  size={20} 
+                  color="#fff" 
+                />
+              </LinearGradient>
+            </TouchableOpacity>
+          )}
+        </AnimatedLinearGradient>
+        
+        {/* Profile Content */}
+        <View style={styles.profileContent}>
+          {/* Avatar Container */}
+          <Animated.View style={[styles.avatarContainer, avatarAnimatedStyle]}>
+            <Image 
+              source={{ uri: clerkUser.imageUrl }} 
+              style={styles.avatar} 
+            />
+            {playerData && (
+              <View style={styles.badgeContainer}>
+                <LinearGradient
+                  colors={getRoleColors()}
+                  style={styles.badgeGradient}
                 >
-                  <Ionicons name="arrow-back" size={24} color={THEME.textPrimary} />
-                </AnimatedTouchable>
+                  <Ionicons name={getRoleIcon()} size={16} color="#fff" />
+                </LinearGradient>
+            </View>
+            )}
+          </Animated.View>
+            
+          {/* User Info Card */}
+          <Animated.View style={[styles.userInfoCard, infoCardAnimatedStyle]}>
+            <Text style={styles.userName}>{clerkUser.fullName}</Text>
+            <Text style={styles.username}>@{clerkUser.username}</Text>
+            
+            {/* Country Badge if available */}
+            {playerData && playerData.countryName && (
+              <View style={styles.countryContainer}>
+                <Text style={styles.countryFlag}>{playerData.countryFlag || '🏳️'}</Text>
+                <Text style={styles.countryName}>{playerData.countryName}</Text>
+              </View>
+            )}
+            
+            {/* Role Badge */}
+            {playerData && (
+              <View style={styles.roleBadgeContainer}>
+                <LinearGradient
+                  colors={getRoleColors()}
+                  start={{x: 0, y: 0}}
+                  end={{x: 1, y: 0}}
+                  style={styles.roleBadgeGradient}
+                >
+                  <Ionicons name={getRoleIcon()} size={14} color="#fff" style={{marginRight: 4}} />
+                  <Text style={styles.roleBadgeText}>{getRoleText()}</Text>
+                </LinearGradient>
+              </View>
+            )}
+            
+            <View style={styles.emailContainer}>
+              <Feather name="mail" size={16} color={THEME.textSecondary} style={styles.emailIcon} />
+            <Text style={styles.emailText}>{clerkUser.primaryEmailAddress?.emailAddress}</Text>
+          </View>
+            
+            {/* Player Stats Row */}
+            {playerData && (
+              <Animated.View style={[styles.statsContainer, slideAnimStyle]}>
+                <View style={styles.statItem}>
+                  <View style={styles.statIconContainer}>
+                    <LinearGradient
+                      colors={[THEME.primary, THEME.primaryLight]}
+                      style={styles.statIconGradient}
+                    >
+                      <FontAwesome5 name="chart-line" size={16} color="#fff" />
+                    </LinearGradient>
+                  </View>
+                  <Text style={styles.statValue}>{playerData.rating || 0}</Text>
+                  <Text style={styles.statLabel}>Rating</Text>
+                </View>
                 
-                <Text style={styles.headerTitle}>Profile</Text>
+                <View style={styles.statDivider} />
                 
-                {!isEditing ? (
-                  <AnimatedTouchable 
-                    style={styles.editButton} 
+                <View style={styles.statItem}>
+                  <View style={styles.statIconContainer}>
+                    <LinearGradient
+                      colors={['#10B981', '#059669']}
+                      style={styles.statIconGradient}
+                    >
+                      <FontAwesome5 name="trophy" size={16} color="#fff" />
+                    </LinearGradient>
+                  </View>
+                  <Text style={styles.statValue}>{playerData.victories || 0}</Text>
+                  <Text style={styles.statLabel}>Wins</Text>
+                </View>
+                
+                <View style={styles.statDivider} />
+                
+                <View style={styles.statItem}>
+                  <View style={styles.statIconContainer}>
+                    <LinearGradient
+                      colors={['#8B5CF6', '#A855F7']}
+                      style={styles.statIconGradient}
+                    >
+                      <FontAwesome5 name="medal" size={16} color="#fff" />
+                    </LinearGradient>
+                  </View>
+                  <Text style={styles.statValue}>{playerData.defeats || 0}</Text>
+                  <Text style={styles.statLabel}>Losses</Text>
+                </View>
+              </Animated.View>
+            )}
+          </Animated.View>
+
+          {/* Player Info Section */}
+          {playerData && (
+            <Animated.View style={[styles.bioCard, slideAnimStyle]}>
+              <LinearGradient
+                colors={['#ffffff', '#fafafa']}
+                style={styles.cardGradient}
+              >
+              <View style={styles.sectionHeader}>
+                  <Ionicons name="information-circle" size={22} color={THEME.primary} />
+                <Text style={styles.sectionTitle}>About</Text>
+                  
+                {!isEditing && (
+                  <TouchableOpacity 
+                      style={styles.editButton2} 
                     onPress={() => setIsEditing(true)}
-                    entering={FadeIn.delay(300)}
                   >
-                    <Ionicons name="create-outline" size={24} color={THEME.primary} />
-                  </AnimatedTouchable>
-                ) : (
-                  <AnimatedTouchable
-                    style={styles.cancelButton}
-                    onPress={() => {
-                      setIsEditing(false);
-                      // Reset fields to original values
-                      if (playerData) {
-                        setFullName(playerData.name || user.name);
-                        setUsername(playerData.username || user.name.replace(/\s+/g, '').toLowerCase());
-                        setBio(playerData.bio || '');
-                      } else if (user) {
-                        setFullName(user.name);
-                        setUsername(user.name.replace(/\s+/g, '').toLowerCase());
-                      }
-                    }}
-                    entering={FadeIn.delay(300)}
-                  >
-                    <Text style={styles.cancelText}>Cancel</Text>
-                  </AnimatedTouchable>
+                    <Feather name="edit-2" size={16} color={THEME.primary} />
+                    <Text style={styles.editButtonText}>Edit</Text>
+                  </TouchableOpacity>
                 )}
               </View>
 
-              <Animated.View style={[styles.avatarContainer, avatarAnimatedStyle]}>
-                {isUploading ? (
-                  <View style={styles.avatarLoading}>
-                    <ActivityIndicator size="large" color={THEME.white} />
-                    <Text style={styles.uploadingText}>Uploading...</Text>
-                  </View>
-                ) : (
-                  <TouchableOpacity 
-                    onPress={isEditing ? pickImage : undefined} 
-                    disabled={!isEditing || isUploading}
-                    style={styles.avatarTouchable}
-                    activeOpacity={0.7}
-                  >
-                    {avatarUri ? (
-        <Image
-                        source={{ uri: avatarUri }}
-          style={styles.avatar}
-                        onError={(e) => {
-                          console.error("Error loading avatar image:", e.nativeEvent.error);
-                          // If image fails to load, try a different approach or show placeholder
-                          if (playerData?.avatar) {
-                            // Try with a random avatar instead
-                            const randomAvatar = generateRandomAvatarUrl(fullName);
-                            console.log("Falling back to random avatar:", randomAvatar);
-                            setAvatarUri(randomAvatar);
-                          } else {
-                            // Show placeholder if all approaches fail
-                            setAvatarUri(null);
-                          }
-                        }}
-                      />
-                    ) : (
-                      <View style={styles.avatarPlaceholder}>
-                        <Ionicons name="person" size={40} color={THEME.textSecondary} />
-      </View>
-                    )}
-                    {isEditing && (
-                      <Animated.View 
-                        style={styles.editAvatarBadge}
-                        entering={FadeIn.delay(300)}
-                      >
-                        <Ionicons name="camera" size={18} color={THEME.white} />
-                      </Animated.View>
-                    )}
-                  </TouchableOpacity>
-                )}
-              </Animated.View>
-
-              {isEditing ? (
-                <View style={styles.editFieldContainer}>
-                  <Text style={styles.fieldLabel}>Full Name</Text>
-                  <TextInput 
-                    style={styles.input}
-                    value={fullName}
-                    onChangeText={setFullName}
-                    placeholder="Your full name"
-                  />
-                  
-                  <Text style={styles.fieldLabel}>Username</Text>
-                  <TextInput 
-                    style={styles.input}
-                    value={username}
-                    onChangeText={setUsername}
-                    placeholder="Your username (no spaces)"
-                    autoCapitalize="none"
-                  />
-                  
-                  <Text style={styles.fieldLabel}>Bio</Text>
-                  <TextInput 
-                    style={[styles.input, styles.bioInput]}
+              {/* Bio */}
+              <View style={styles.fieldContainer}>
+                {isEditing ? (
+                  <TextInput
+                    style={styles.bioInput}
                     value={bio}
                     onChangeText={setBio}
-                    placeholder="Tell us about yourself"
                     multiline
                     numberOfLines={4}
+                    placeholder="Tell us about yourself"
                   />
-                </View>
-              ) : (
-                <>
-                  <Text style={styles.nameText}>{fullName || user.name}</Text>
-                  {isNameChangeRequested && (
-                    <View style={styles.pendingBadge}>
-                      <Text style={styles.pendingText}>Name change pending</Text>
-                    </View>
-                  )}
-                  <Text style={styles.usernameText}>@{username || user.name.replace(/\s+/g, '').toLowerCase()}</Text>
-                  <Text style={styles.emailText}>{user.email}</Text>
-                  {playerData?.bio && <Text style={styles.bioText}>{playerData.bio}</Text>}
-                </>
-              )}
-
-      {/* Actions */}
-      <View style={styles.actionsSection}>
-                {isEditing ? (
-                  <>
-                    <TouchableOpacity
-                      style={[styles.actionButton, styles.saveButton]}
-                      onPress={saveChanges}
-                      disabled={isSaving}
-                    >
-                      {isSaving ? (
-                        <ActivityIndicator size="small" color="white" />
-                      ) : (
-                        <>
-                          <Ionicons name="save-outline" size={20} color="white" />
-                          <Text style={[styles.actionText, { color: 'white' }]}>Save Changes</Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                    
-                    <TouchableOpacity
-                      style={styles.actionButton}
-                      onPress={() => setIsEditing(false)}
-                      disabled={isSaving}
-                    >
-                      <Ionicons name="close-outline" size={20} color="#333" />
-                      <Text style={styles.actionText}>Cancel</Text>
-                    </TouchableOpacity>
-                  </>
                 ) : (
-        <TouchableOpacity
-          style={styles.actionButton}
-                    onPress={() => setIsEditing(true)}
-        >
-          <Ionicons name="pencil-outline" size={20} color="#333" />
-          <Text style={styles.actionText}>Edit Profile</Text>
-                  </TouchableOpacity>
+                  <Text style={styles.bioText}>
+                    {playerData.bio || 'No bio provided. Tap the edit button to add your bio.'}
+                  </Text>
                 )}
+              </View>
 
-                <TouchableOpacity
-                  style={styles.actionButton}
-                  onPress={() => router.push('/test-upload')}
-                >
-                  <Ionicons name="cloud-upload-outline" size={20} color="#333" />
-                  <Text style={styles.actionText}>Test Upload Tool</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.actionButton}
-                  onPress={() => router.push('/dev-tools')}
-                >
-                  <Ionicons name="code-working-outline" size={20} color="#333" />
-                  <Text style={styles.actionText}>Developer Tools</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.signoutButton]}
-          onPress={() =>
-            Alert.alert("Confirm Logout", "Are you sure you want to sign out?", [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: "Sign Out",
-                style: "destructive",
-                        onPress: handleSignOut,
-              },
-            ])
-          }
-        >
-          <Ionicons name="log-out-outline" size={20} color="red" />
-          <Text style={[styles.actionText, { color: 'red' }]}>Sign Out</Text>
-        </TouchableOpacity>
-      </View>
-
-              {migrationNotice && (
-                <Animated.View 
-                  style={styles.migrationNotice}
-                  entering={FadeIn.duration(300)}
-                >
-                  <Text style={styles.migrationText}>{migrationNotice}</Text>
-                </Animated.View>
+                {/* Action Buttons for editing */}
+              {isEditing && (
+                <View style={styles.actionButtons}>
+                  <Button
+                    label="Save Changes"
+                    onPress={saveChanges}
+                    loading={isSaving}
+                    disabled={isSaving}
+                    style={styles.saveButton}
+                  />
+                  <TouchableOpacity
+                    style={styles.cancelButton}
+                    onPress={() => {
+                      setIsEditing(false);
+                      // Reset form data
+                      setBio(playerData.bio || '');
+                    }}
+                    disabled={isSaving}
+                  >
+                    <Text style={styles.cancelButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+                </View>
               )}
+              </LinearGradient>
             </Animated.View>
           )}
-        </ScrollView>
-      </KeyboardAvoidingView>
+
+          {/* Details Section */}
+          <Animated.View style={[styles.detailsCard, slideAnimStyle]}>
+            <LinearGradient
+              colors={['#ffffff', '#fafafa']}
+              style={styles.cardGradient}
+            >
+              <View style={styles.sectionHeader}>
+                <Ionicons name="list" size={22} color={THEME.primary} />
+                <Text style={styles.sectionTitle}>Details</Text>
+              </View>
+              
+              {/* Role */}
+              {playerData && (
+                <View style={styles.detailItem}>
+                  <View style={[
+                    styles.detailIconContainer, 
+                    playerData.role === 'organizer' ? styles.organizerRoleBadge :
+                    playerData.role === 'dynasty_admin' ? styles.dynastyAdminRoleBadge :
+                    playerData.role === 'admin' ? styles.adminRoleBadge : 
+                    playerData.role === 'moderator' ? styles.modRoleBadge : styles.userRoleBadge
+                  ]}>
+                    <Ionicons name={getRoleIcon()} size={18} color="#fff" />
+                  </View>
+                  <Text style={styles.detailText}>
+                    Role: <Text style={styles.roleText}>{getRoleText()}</Text>
+                  </Text>
+                </View>
+              )}
+
+              {/* Country */}
+              {playerData && playerData.countryName && (
+                <View style={styles.detailItem}>
+                  <View style={[styles.detailIconContainer, {backgroundColor: '#10B981'}]}>
+                    <MaterialCommunityIcons name="earth" size={18} color="#fff" />
+                  </View>
+                  <Text style={styles.detailText}>
+                    Country: <Text style={styles.roleText}>{playerData.countryName} {playerData.countryFlag || '🏳️'}</Text>
+                  </Text>
+                </View>
+              )}
+
+              {/* Joined Date */}
+              <View style={styles.detailItem}>
+                <View style={styles.detailIconContainer}>
+                  <Ionicons name="calendar" size={18} color="#fff" />
+                </View>
+                <Text style={styles.detailText}>
+                  Joined {playerData && playerData.registrationDate 
+                    ? new Date(playerData.registrationDate).toLocaleDateString('en-US', {
+                        month: 'long',
+                        day: 'numeric',
+                        year: 'numeric'
+                      })
+                    : clerkUser?.createdAt ? new Date(clerkUser.createdAt).toLocaleDateString('en-US', {
+                        month: 'long',
+                        day: 'numeric',
+                        year: 'numeric'
+                      }) : 'Unknown'}
+                </Text>
+              </View>
+              
+              {/* Email (visible to user only) */}
+              <View style={styles.detailItem}>
+                <View style={[styles.detailIconContainer, {backgroundColor: '#10B981'}]}>
+                  <Ionicons name="mail" size={18} color="#fff" />
+                </View>
+                <Text style={styles.detailText}>
+                  Email: <Text style={{color: THEME.textPrimary, fontWeight: '500'}}>{clerkUser.primaryEmailAddress?.emailAddress}</Text>
+                  <Text style={{color: THEME.textSecondary, fontSize: 12}}> (Only visible to you)</Text>
+                </Text>
+              </View>
+              
+              {/* Activity Status */}
+              <View style={styles.detailItem}>
+                <View style={[styles.detailIconContainer, {backgroundColor: '#8B5CF6'}]}>
+                  <Ionicons name="stats-chart" size={18} color="#fff" />
+                </View>
+                <Text style={styles.detailText}>
+                  Activity Status: <Text style={{color: '#10B981', fontWeight: '600'}}>Active</Text>
+                </Text>
+              </View>
+            </LinearGradient>
+          </Animated.View>
+
+          {/* Account Actions */}
+          <Animated.View style={[styles.accountActions, actionButtonsAnimatedStyle]}>
+            {!playerData && (
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={() => router.push('/player-registration')}
+                activeOpacity={0.7}
+              >
+                <LinearGradient
+                  colors={[THEME.primary, '#FF8C3D']}
+                  start={{x: 0, y: 0}}
+                  end={{x: 1, y: 0}}
+                  style={styles.actionGradient}
+                >
+                  <FontAwesome5 name="user-plus" size={16} color="#fff" style={{marginRight: 8}} />
+                  <Text style={styles.actionText}>Register as Player</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
+            
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={handleSignOut}
+              activeOpacity={0.7}
+            >
+              <LinearGradient
+                colors={['#f43f5e', '#e11d48']}
+                start={{x: 0, y: 0}}
+                end={{x: 1, y: 0}}
+                style={styles.actionGradient}
+              >
+                <Ionicons name="log-out-outline" size={20} color="#fff" style={{marginRight: 8}} />
+                <Text style={styles.actionText}>Sign Out</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </Animated.View>
+          </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  keyboardAvoidView: {
+  container: {
     flex: 1,
+    backgroundColor: '#f8fafc',
+    paddingTop: 0,
   },
   scrollContent: {
     flexGrow: 1,
-  },
-  centeredContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: THEME.white,
-  },
-  noUserText: {
-    fontSize: 16,
-    color: THEME.textSecondary,
-    marginBottom: 12,
-  },
-  container: {
-    flex: 1,
-    backgroundColor: THEME.white,
-  },
-  profileContainer: {
-    flex: 1,
-  },
-  headerContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-  },
-  backButton: {
-    padding: 8,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: THEME.textPrimary,
-    flex: 1,
-  },
-  editButton: {
-    padding: 8,
-  },
-  cancelButton: {
-    padding: 8,
-  },
-  cancelText: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: THEME.primary,
-  },
-  avatarContainer: {
-    alignItems: 'center',
-    marginVertical: 20,
-  },
-  avatarTouchable: {
-    position: 'relative',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    overflow: 'visible',
-  },
-  avatar: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    borderWidth: 3,
-    borderColor: THEME.primary,
-  },
-  avatarPlaceholder: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: THEME.lightGray,
-    borderWidth: 3,
-    borderColor: THEME.primary,
-  },
-  avatarLoading: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    borderWidth: 3,
-    borderColor: THEME.primary,
-  },
-  editAvatarBadge: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    backgroundColor: THEME.primary,
-    borderRadius: 20,
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: THEME.white,
-    shadowColor: THEME.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 2,
-    elevation: 5,
-  },
-  nameText: {
-    fontSize: 22,
-    fontWeight: '600',
-    color: THEME.textPrimary,
-  },
-  pendingBadge: {
-    backgroundColor: THEME.secondary,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginTop: 4,
-    marginBottom: 4,
-  },
-  pendingText: {
-    color: THEME.primary,
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  usernameText: {
-    fontSize: 16,
-    color: THEME.textSecondary,
-    marginTop: 2,
-  },
-  emailText: {
-    fontSize: 14,
-    color: THEME.textSecondary,
-    marginTop: 4,
-  },
-  bioText: {
-    fontSize: 14,
-    color: THEME.textSecondary,
-    marginTop: 12,
-    textAlign: 'center',
-    paddingHorizontal: 16,
-  },
-  actionsSection: {
-    marginTop: 40,
-    gap: 16,
-    paddingHorizontal: 24,
-    paddingBottom: 40,
-  },
-  actionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: THEME.light,
-    padding: 16,
-    borderRadius: 12,
-    justifyContent: 'center',
-  },
-  actionText: {
-    marginLeft: 8,
-    color: THEME.textPrimary,
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  saveButton: {
-    backgroundColor: THEME.primary,
-  },
-  signoutButton: {
-    marginTop: 16,
-  },
-  editFieldContainer: {
-    width: '100%',
-    marginTop: 16,
-  },
-  fieldLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: THEME.textSecondary,
-    marginBottom: 8,
-    marginLeft: 4,
-  },
-  input: {
-    backgroundColor: THEME.light,
-    borderWidth: 1,
-    borderColor: THEME.lightGray,
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    color: THEME.textPrimary,
-    marginBottom: 16,
-  },
-  bioInput: {
-    height: 100,
-    textAlignVertical: 'top',
+    paddingBottom: 30,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#f8fafc',
   },
-  loadingText: {
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#f8fafc',
+  },
+  errorText: {
     fontSize: 16,
-    color: THEME.textPrimary,
-    marginTop: 12,
+    color: THEME.danger,
+    marginBottom: 20,
+    textAlign: 'center',
   },
-  uploadingText: {
-    color: THEME.white,
-    fontSize: 14,
-    fontWeight: '500',
-    marginTop: 8,
+  headerBackground: {
+    height: 200,
+    width: '100%',
+    position: 'relative',
+    borderBottomLeftRadius: 30,
+    borderBottomRightRadius: 30,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.2,
+        shadowRadius: 15,
+      },
+      android: {
+        elevation: 10,
+      },
+    }),
   },
-  migrationNotice: {
-    backgroundColor: THEME.info,
-    padding: 10,
-    marginHorizontal: 20,
-    marginTop: 10,
-    borderRadius: 8,
+  decorCircle1: {
+    position: 'absolute',
+    top: -50,
+    right: -50,
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  decorCircle2: {
+    position: 'absolute',
+    bottom: -30,
+    left: -30,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  backButton: {
+    position: 'absolute',
+    top: 10, 
+    left: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    zIndex: 10,
+  },
+  backButtonText: {
+    color: '#fff',
+    marginLeft: 6,
+    fontWeight: '600',
+  },
+  editButton: {
+    position: 'absolute',
+    top: 10,
+    right: 16,
+    overflow: 'hidden',
+    borderRadius: 22,
+    zIndex: 10,
+  },
+  editButtonGradient: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  migrationText: {
-    color: THEME.white,
-    fontSize: 12,
-    textAlign: 'center',
+  profileContent: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+  avatarContainer: {
+    alignSelf: 'center',
+    marginTop: -60,
+    elevation: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    zIndex: 10,
+  },
+  avatar: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    borderWidth: 4,
+    borderColor: 'white',
+  },
+  badgeContainer: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    borderRadius: 15,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  badgeGradient: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  userInfoCard: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: 20,
+    marginTop: 70,
+    alignItems: 'center',
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  userName: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: THEME.textPrimary,
+    marginBottom: 4,
+  },
+  username: {
+    fontSize: 16,
+    color: THEME.textSecondary,
+    marginBottom: 12,
+  },
+  countryContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.05)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    marginBottom: 12,
+  },
+  countryFlag: {
+    fontSize: 16,
+    marginRight: 8,
+  },
+  countryName: {
+    fontSize: 14,
+    color: THEME.textPrimary,
+    fontWeight: '500',
+  },
+  roleBadgeContainer: {
+    overflow: 'hidden',
+    borderRadius: 20,
+    marginBottom: 12,
+  },
+  roleBadgeGradient: {
+    borderRadius: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  roleBadgeText: {
+    fontSize: 14,
+    color: '#fff',
+    fontWeight: '500',
+  },
+  emailContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  emailIcon: {
+    marginRight: 6,
+  },
+  emailText: {
+    fontSize: 14,
+    color: THEME.textSecondary,
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    width: '100%',
+    justifyContent: 'space-around',
+    marginTop: 10,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: THEME.lightGray,
+  },
+  statItem: {
+    alignItems: 'center',
+  },
+  statIconContainer: {
+    marginBottom: 8,
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  statIconGradient: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: THEME.textPrimary,
+    marginBottom: 2,
+  },
+  statLabel: {
+    fontSize: 14,
+    color: THEME.textSecondary,
+  },
+  statDivider: {
+    width: 1,
+    height: '80%',
+    backgroundColor: 'rgba(0, 0, 0, 0.05)',
+    alignSelf: 'center',
+  },
+  bioCard: {
+    marginTop: 20,
+    borderRadius: 20,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 5,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
+  },
+  detailsCard: {
+    marginTop: 20,
+    borderRadius: 20,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 5,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
+  },
+  cardGradient: {
+    borderRadius: 20,
+    padding: 20,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    position: 'relative',
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: THEME.textPrimary,
+    marginLeft: 10,
+    flex: 1,
+  },
+  editButton2: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: THEME.primaryLight,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    position: 'absolute',
+    right: 0,
+  },
+  editButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: THEME.primary,
+    marginLeft: 4,
+  },
+  fieldContainer: {
+    marginBottom: 16,
+  },
+  bioText: {
+    fontSize: 16,
+    color: THEME.textPrimary,
+    lineHeight: 24,
+  },
+  bioInput: {
+    borderWidth: 1,
+    borderColor: THEME.lightGray,
+    borderRadius: 12,
+    padding: 12,
+    minHeight: 100,
+    backgroundColor: 'rgba(0, 0, 0, 0.02)',
+    fontSize: 16,
+    color: THEME.textPrimary,
+    textAlignVertical: 'top',
+    lineHeight: 24,
+  },
+  detailItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  detailIconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: THEME.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
+  detailText: {
+    fontSize: 16,
+    color: THEME.textPrimary,
+    flex: 1,
+  },
+  organizerRoleBadge: {
+    backgroundColor: '#4F46E5', // Purple for organizer
+  },
+  dynastyAdminRoleBadge: {
+    backgroundColor: '#10B981', // Green for dynasty admin
+  },
+  adminRoleBadge: {
+    backgroundColor: '#4F46E5', // Purple for admin
+  },
+  modRoleBadge: {
+    backgroundColor: '#0EA5E9', // Blue for moderator
+  },
+  userRoleBadge: {
+    backgroundColor: THEME.primary, // Default orange for regular users
+  },
+  roleText: {
+    fontWeight: '600',
+    color: THEME.textPrimary,
+  },
+  actionButtons: {
+    marginTop: 20,
+  },
+  saveButton: {
+    borderRadius: 12,
+    height: 48,
+  },
+  cancelButton: {
+    marginTop: 12,
+    padding: 12,
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 16,
+    color: THEME.textSecondary,
+    fontWeight: '500',
+  },
+  accountActions: {
+    marginTop: 20,
+    marginBottom: 30,
+  },
+  actionButton: {
+    marginVertical: 8,
+    borderRadius: 12,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 3,
+      },
+    }),
+  },
+  actionGradient: {
+    paddingVertical: 12,
+    borderRadius: 12,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  actionText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
 

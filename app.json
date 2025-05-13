@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "clerk-expo-quickstart",
-    "slug": "clerk-expo-quickstart",
+    "name": "signchess",
+    "slug": "signchess",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "myapp",
+    "scheme": "signchess",
     "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/images/splash.png",
@@ -14,14 +14,36 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.athex-web3.signchess"
+      "bundleIdentifier": "com.athex-web3.signchess",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
+      "associatedDomains": [
+        "applinks:signchess.com"
+      ]
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff",
-        "package": "com.athex-web3.signchess"
-      }
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.athex-web3.signchess",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "signchess"
+            },
+            {
+              "scheme": "https",
+              "host": "*.signchess.com"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -35,6 +57,14 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": "https://signchess.com"
+      },
+      "eas": {
+        "projectId": "your-project-id-here"
+      }
     },
     "newArchEnabled": true
   }

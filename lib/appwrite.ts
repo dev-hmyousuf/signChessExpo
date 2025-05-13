@@ -1,4 +1,4 @@
-import { Account, Client, Databases, ID, Query, Permission, Role, Storage, Functions } from 'appwrite';
+import { Account, Client, Databases, ID, Query, Permission, Role, Storage, Functions } from 'react-native-appwrite';
 import { getMimeType, getFilenameFromUri } from '@/app/utils/fileUtils';
 import * as FileSystem from 'expo-file-system';
 import { LEGACY_BUCKET_IDS } from '@/app/utils/fileMigration';
@@ -19,16 +19,18 @@ export const STORAGE_BUCKET_ID = '681c575d000fd7afbf5a'; // Updated with the cor
 // Collections
 // IMPORTANT: Replace these string values with the actual collection IDs from your Appwrite console
 // Find these IDs by clicking on each collection in the Appwrite console
-export const COLLECTION_COUNTRIES = '681a327d0034a14ff8bc'; // Replace with the actual Collection ID from Appwrite console
-export const COLLECTION_PLAYERS = '681a3287000d8e290f6d'; // Replace with the actual Collection ID from Appwrite console
+export const COLLECTION_COUNTRIES = '681a327d0034a14ff8bc'; // Use the actual collection ID
+export const COLLECTION_PLAYERS = '681a3287000d8e290f6d'; // ERROR: Update this with your actual players collection ID from Appwrite console
 export const COLLECTION_TOURNAMENTS = '681a328f000e0449ae7e'; // Replace with the actual Collection ID from Appwrite console
 export const COLLECTION_MATCHES = '681a3298003694facb41'; // Replace with the actual Collection ID from Appwrite console
+export const COLLECTION_USERS = '681cf3ac000019883366';
+export const COLLECTION_ADMIN_ROLES = '681cf3c0000a7f6e2e8c'; // Admin roles collection
 
 // Name change requests collection
-export const COLLECTION_NAME_CHANGE_REQUESTS = 'nameChangeRequests'; // Create this collection in Appwrite
+export const COLLECTION_NAME_CHANGE_REQUESTS = '681cf3b30001d6c13c2c'; // Use the actual collection ID
 
 // Initialize Appwrite client
-const client = new Client();
+export const client = new Client();
 client
   .setEndpoint(APPWRITE_ENDPOINT)
   .setProject(APPWRITE_PROJECT_ID);
@@ -55,15 +57,17 @@ export const getCurrentSession = async () => {
 };
 
 /**
- * Check if the user is logged in
+ * Check if the user is logged in using Clerk
+ * This is a wrapper around Clerk's authentication system
+ * Note: This function must be used within a Clerk provider context
  */
-export const isLoggedIn = async () => {
-  try {
-    const session = await account.get();
-    return session !== null;
-  } catch (error) {
-    return false;
-  }
+export const isLoggedIn = () => {
+  // This function is now a stub that should use Clerk directly from the component
+  // Using useAuth from '@clerk/clerk-expo' is the recommended approach
+  // Since this is in a non-React file, we should call this from components using useAuth directly
+  
+  console.log('Using isLoggedIn from appwrite.ts - this should use Clerk auth in your component');
+  return false; // Default fallback - components should use Clerk directly
 };
 
 /**
@@ -183,11 +187,10 @@ export const createDocumentWithDynastyPermissions = async (
 };
 
 // Countries
-export const getCountries = async () => {
+export const getCountries = async (retryCount = 0) => {
   try {
     console.log("getCountries: Starting to fetch countries from Appwrite");
     console.log("Using APPWRITE_DATABASE_ID:", APPWRITE_DATABASE_ID);
-    console.log("Using COLLECTION_COUNTRIES:", COLLECTION_COUNTRIES);
     
     const response = await databases.listDocuments(
       APPWRITE_DATABASE_ID,
@@ -215,12 +218,19 @@ export const getCountries = async () => {
           ...country,
           playerCount: playersResponse.total
         };
-      } catch (error) {
+      } catch (error: any) {
         console.error(`Error fetching players for country ${(country as any).name || country.$id}:`, error);
+        
+        // Handle server errors with retry
+        if (error?.code >= 500 && error?.code < 600) {
+          console.warn(`Server error (${error?.code}) when fetching players for ${(country as any).name}. Returning zero count.`);
+        }
+        
         // Return country with zero player count if there's an error
         return {
           ...country,
-          playerCount: 0
+          playerCount: 0,
+          playerCountError: true
         };
       }
     }));
@@ -231,8 +241,21 @@ export const getCountries = async () => {
       "No countries found");
     
     return countriesWithPlayerCounts;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error fetching countries:', error);
+    
+    // Implement retry with exponential backoff for server errors (5xx)
+    if (error?.code >= 500 && error?.code < 600 && retryCount < 3) {
+      const delay = Math.pow(2, retryCount) * 1000; // exponential backoff: 1s, 2s, 4s
+      console.log(`Retrying fetch countries in ${delay}ms (attempt ${retryCount + 1})...`);
+      
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          resolve(getCountries(retryCount + 1));
+        }, delay);
+      });
+    }
+    
     throw error;
   }
 };
@@ -280,7 +303,7 @@ export const createCountry = async (name: string, flag: string) => {
 };
 
 // Players
-export const getPlayersByCountry = async (countryId: string) => {
+export const getPlayersByCountry = async (countryId: string, retryCount = 0) => {
   try {
     const response = await databases.listDocuments(
       APPWRITE_DATABASE_ID,
@@ -291,8 +314,27 @@ export const getPlayersByCountry = async (countryId: string) => {
       ]
     );
     return response.documents;
-  } catch (error) {
+  } catch (error: any) {
     console.error(`Error fetching players for country ${countryId}:`, error);
+    
+    // Implement retry with exponential backoff for server errors (5xx)
+    if (error?.code >= 500 && error?.code < 600 && retryCount < 3) {
+      const delay = Math.pow(2, retryCount) * 1000; // exponential backoff: 1s, 2s, 4s
+      console.log(`Retrying fetch players for country ${countryId} in ${delay}ms (attempt ${retryCount + 1})...`);
+      
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          resolve(getPlayersByCountry(countryId, retryCount + 1));
+        }, delay);
+      });
+    }
+    
+    // If we've exhausted retries or it's not a server error, return empty array instead of throwing
+    if (error?.code >= 500 && error?.code < 600) {
+      console.warn(`Server error (${error?.code}) persisted after ${retryCount} retries. Returning empty array.`);
+      return [];
+    }
+    
     throw error;
   }
 };
@@ -370,33 +412,48 @@ export const getTournaments = async () => {
 };
 
 // Matches
-export const getMatchesByTournament = async (tournamentId: string) => {
+export const getMatchesByTournament = async (countryId: string) => {
   try {
+    console.log('Fetching matches for country:', countryId);
     const response = await databases.listDocuments(
       APPWRITE_DATABASE_ID,
       COLLECTION_MATCHES,
       [
-        Query.equal('tournamentId', tournamentId),
+        Query.equal('tournamentId', countryId),
         Query.limit(100)
       ]
     );
+    console.log('Found matches:', response.documents);
     return response.documents;
   } catch (error) {
-    console.error(`Error fetching matches for tournament ${tournamentId}:`, error);
+    console.error(`Error fetching matches for country ${countryId}:`, error);
     throw error;
   }
 };
 
 export const getMatchById = async (matchId: string) => {
   try {
+    console.log(`Fetching match with ID: ${matchId}, type: ${typeof matchId}`);
+    
+    if (!matchId || typeof matchId !== 'string') {
+      console.error('Invalid matchId provided:', matchId);
+      return null;
+    }
+    
     const match = await databases.getDocument(
       APPWRITE_DATABASE_ID,
       COLLECTION_MATCHES,
       matchId
     );
+    
+    console.log(`Successfully retrieved match ${matchId}:`, match ? 'Found' : 'Not found');
     return match;
-  } catch (error) {
-    console.error(`Error fetching match ${matchId}:`, error);
+  } catch (error: any) {
+    if (error?.code === 404) {
+      console.error(`Match not found with ID ${matchId}`);
+    } else {
+      console.error(`Error fetching match ${matchId}:`, error?.message || error);
+    }
     return null;
   }
 };
@@ -408,7 +465,10 @@ export const createMatch = async (match: {
   tournamentId: string;
   round: number;
   status: string;
+  isScheduled?: boolean;
   scheduledDate?: string;
+  predictedWinnerId?: string;
+  winProbability?: number;
 }) => {
   try {
     return await databases.createDocument(
@@ -434,6 +494,140 @@ export const updateMatch = async (matchId: string, data: any) => {
     );
   } catch (error) {
     console.error(`Error updating match ${matchId}:`, error);
+    throw error;
+  }
+};
+
+// Update match data
+export const updateMatchData = async (matchId: string, data: any) => {
+  try {
+    console.log(`Updating match ${matchId} with data:`, data);
+    
+    // Handle special Appwrite operations like $append
+    const hasAppendOperation = data.$append && typeof data.$append === 'object';
+    
+    // If using $append, we don't need to manually handle arrays
+    if (!hasAppendOperation) {
+      // Clone data to avoid modifying the original
+      const processedData = { ...data };
+      
+      // Verify the match exists first and handle arrays manually
+      try {
+        // Get current match data
+        const match = await databases.getDocument(
+          APPWRITE_DATABASE_ID,
+          COLLECTION_MATCHES,
+          matchId
+        );
+        console.log(`Match ${matchId} exists, current data:`, match);
+        
+        // Special handling for arrays to ensure they're properly formatted
+        if (processedData.movesPlayed !== undefined) {
+          console.log('Processing movesPlayed array:', processedData.movesPlayed);
+          
+          // Ensure what we have is a proper array
+          let movesArray = processedData.movesPlayed;
+          
+          // If it's a JSON string, parse it
+          if (typeof movesArray === 'string' && 
+              (movesArray.startsWith('[') || movesArray.startsWith('{'))) {
+            try {
+              movesArray = JSON.parse(movesArray);
+            } catch (e) {
+              console.error('Failed to parse movesPlayed JSON string:', e);
+            }
+          }
+          
+          // Ensure it's an array
+          if (!Array.isArray(movesArray)) {
+            if (movesArray === null || movesArray === undefined) {
+              movesArray = [];
+            } else {
+              movesArray = [movesArray];
+            }
+          }
+          
+          // Set the processed array back to the data object
+          processedData.movesPlayed = movesArray;
+          
+          console.log('Processed movesPlayed array:', processedData.movesPlayed);
+        }
+        
+        // Update the data reference for the next steps
+        data = processedData;
+      } catch (verifyError) {
+        console.error(`Error verifying match ${matchId} existence:`, verifyError);
+        // Continue with update anyway
+      }
+    } else {
+      console.log('Using Appwrite $append operation for arrays:', data.$append);
+    }
+    
+    console.log('Sending final update data to Appwrite:', data);
+    
+    // Try direct update first
+    try {
+      const result = await databases.updateDocument(
+        APPWRITE_DATABASE_ID,
+        COLLECTION_MATCHES,
+        matchId,
+        data
+      );
+      
+      console.log(`Successfully updated match ${matchId} with result:`, result);
+      return result;
+    } catch (updateError) {
+      console.error(`Error in initial update attempt:`, updateError);
+      
+      // If the first attempt failed, try a simplified approach
+      if (!hasAppendOperation && data.movesPlayed) {
+        console.log('First update attempt failed. Trying alternative approach with explicit array...');
+        
+        // Try using $append operation for movesPlayed
+        try {
+          // Get the last move from the array
+          const lastMove = Array.isArray(data.movesPlayed) && data.movesPlayed.length > 0 
+            ? data.movesPlayed[data.movesPlayed.length - 1] 
+            : null;
+          
+          if (lastMove) {
+            // Create a new update with just $append for the last move
+            const appendData = {
+              $append: { movesPlayed: [lastMove] }
+            };
+            
+            // Add any other fields except movesPlayed
+            const otherFields = { ...data };
+            delete otherFields.movesPlayed;
+            
+            // Combine the two
+            const newUpdateData = {
+              ...otherFields,
+              ...appendData
+            };
+            
+            console.log('Trying alternative update with:', newUpdateData);
+            
+            const appendResult = await databases.updateDocument(
+              APPWRITE_DATABASE_ID,
+              COLLECTION_MATCHES,
+              matchId,
+              newUpdateData
+            );
+            
+            console.log('Alternative update successful:', appendResult);
+            return appendResult;
+          }
+        } catch (alternativeError) {
+          console.error('Alternative update also failed:', alternativeError);
+        }
+      }
+      
+      // If we get here, both approaches failed, so throw the original error
+      throw updateError;
+    }
+  } catch (error) {
+    console.error(`Error updating match data for match ${matchId}:`, error);
     throw error;
   }
 };
@@ -481,13 +675,21 @@ export const verifyStorageBucket = async (): Promise<boolean> => {
 };
 
 // Upload profile image - Browser version
-export const uploadProfileImage = async (file: File): Promise<string> => {
+export const uploadProfileImage = async (file: any): Promise<string> => {
   try {
+    // For React Native Appwrite, file must be an object with uri, name, type, and size
+    const fileObject = file.uri ? file : {
+      uri: file.path || '',
+      name: file.name || 'image.jpg',
+      type: file.type || 'image/jpeg',
+      size: file.size || 0
+    };
+    
     // Upload the file to storage
     const result = await storage.createFile(
       STORAGE_BUCKET_ID,
       ID.unique(),
-      file
+      fileObject
     );
     
     // Return the file ID which can be used to construct the file URL
@@ -611,12 +813,17 @@ export const uploadProfileImageFromUri = async (uri: string): Promise<string> =>
           const fetchResponse = await fetch(uri);
           const blob = await fetchResponse.blob();
           
-          // Create a File object from the blob
-          const file = new File([blob], filename, { type: mimeType });
+          // Create a file object compatible with react-native-appwrite
+          const file = {
+            name: filename,
+            type: mimeType,
+            size: blob.size || 0,
+            uri: uri
+          };
           
           // Create FormData for direct fetch API call
           const formData = new FormData();
-          formData.append('file', file);
+          formData.append('file', file as any);
           formData.append('fileId', fileId);
           
           // Try direct fetch upload first
@@ -742,19 +949,20 @@ export const uploadImageBase64 = async (uri: string): Promise<string> => {
     // Read file as base64
     const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
     
-    // Convert base64 to blob
-    const base64Response = await fetch(`data:${mimeType};base64,${base64}`);
-    const blob = await base64Response.blob();
-    
-    // Create a File object from the blob
-    const file = new File([blob], filename, { type: mimeType });
+    // For react-native-appwrite, create a file object with required properties
+    const fileObject = {
+      name: filename,
+      type: mimeType,
+      size: base64.length,
+      uri: uri
+    };
     
     // Upload with the SDK
-    console.log(`Uploading file (${blob.size} bytes)...`);
+    console.log(`Uploading file...`);
     const result = await storage.createFile(
       STORAGE_BUCKET_ID,
       fileId,
-      file
+      fileObject
     );
     
     console.log(`Upload successful! File ID: ${result.$id}`);
@@ -1046,6 +1254,271 @@ export const restoreDefaultCountries = async (countries: { name: string; flag: s
   }
 };
 
+// Email OTP specific functions
+/**
+ * Create an Email OTP session for authentication
+ * @param userId Unique ID for the user (for existing users, use email address as ID)
+ * @param email User's email address
+ * @param phrase Whether to include a security phrase in the email
+ * @returns The token response which includes the userId to use for verification
+ */
+export const createEmailOtpSession = async (userId: string, email: string, phrase: boolean = false) => {
+  try {
+    // When userId is the same as email, this is likely a sign-in request for an existing user
+    const isSignIn = userId === email;
+    
+    // Start OTP authentication using the new EmailToken API
+    const response = await account.createEmailToken(
+      userId,
+      email,
+      phrase // Pass the security phrase flag
+    );
+    
+    return response;
+  } catch (error) {
+    console.error('Error creating Email OTP session:', error);
+    throw error;
+  }
+};
+
+/**
+ * Update (verify) an Email OTP session with the provided code
+ * @param userId User ID from the createEmailOtpSession response
+ * @param otp The 6-digit OTP code from the email
+ */
+export const updateEmailOtpSession = async (userId: string, otp: string) => {
+  try {
+    // Verify the OTP code
+    return await account.createSession(userId, otp);
+  } catch (error) {
+    console.error('Error verifying Email OTP:', error);
+    throw error;
+  }
+};
+
+// Extend the Account type with OTP methods
+declare module 'react-native-appwrite' {
+  interface Account {
+    createOTP(userId: string, email: string): Promise<any>;
+    updateOTP(userId: string, otp: string): Promise<any>;
+  }
+}
+
+// Add OTP methods to the account object
+account.createOTP = async (userId: string, email: string) => {
+  try {
+    // Use createEmailToken according to the latest Appwrite documentation
+    // For existing users, when userId is the same as email, this indicates
+    // we're doing a login rather than a signup
+    const isExistingUser = userId === email;
+    
+    const response = await account.createEmailToken(
+      userId,
+      email
+    );
+    
+    // Return the actual response from the API, including the userId
+    return response;
+  } catch (error) {
+    console.error('Error in createOTP:', error);
+    throw error;
+  }
+};
+
+account.updateOTP = async (userId: string, otp: string) => {
+  try {
+    // Use createSession for verification according to the latest Appwrite documentation
+    const session = await account.createSession(userId, otp);
+    return session;
+  } catch (error) {
+    console.error('Error in updateOTP:', error);
+    throw error;
+  }
+};
+
+// Create a player with Clerk connection
+export const createPlayer = async ({
+  userId,
+  clerkId,
+  username,
+  name,
+  countryId,
+  avatarUrl,
+  dateOfBirth,
+  playingStyle,
+  handedness,
+  bio,
+  twitterUsername
+}: {
+  userId: string,
+  clerkId: string,
+  username: string,
+  name: string,
+  countryId: string,
+  avatarUrl?: string,
+  dateOfBirth?: string,
+  playingStyle?: string,
+  handedness?: string,
+  bio?: string,
+  twitterUsername?: string
+}) => {
+  try {
+    // Create the player document
+    const playerData = {
+      userId,        // Original User ID
+      clerkId,       // Clerk User ID
+      username,      // Username from Clerk
+      name,          // Full name for display
+      countryId,
+      avatarUrl: avatarUrl || '',
+      isActive: true,
+      handedness: handedness || '',
+      bio: bio || '',
+      registrationDate: new Date().toISOString(),
+      victories: 0,
+      defeats: 0,
+      totalMatches: 0,
+      rating: 1200,    // Add default rating value
+      status: 'pending',
+      twitterUsername: twitterUsername || "" // Add status field with default value
+    };
+    
+    // Create the player document
+    const player = await databases.createDocument(
+      APPWRITE_DATABASE_ID,
+      COLLECTION_PLAYERS,
+      ID.unique(),
+      playerData
+    );
+    
+    console.log('Player created successfully:', player.$id);
+    return player;
+  } catch (error) {
+    console.error('Error creating player:', error);
+    throw error;
+  }
+};
+
+// Get player by username
+export const getPlayerByUsername = async (username: string) => {
+  try {
+    const response = await databases.listDocuments(
+      APPWRITE_DATABASE_ID,
+      COLLECTION_PLAYERS,
+      [Query.equal('username', username), Query.limit(1)]
+    );
+    
+    if (response.documents.length === 0) {
+      console.log(`No player found with username "${username}"`);
+      return null;
+    }
+    
+    return response.documents[0];
+  } catch (error) {
+    console.error(`Error fetching player with username ${username}:`, error);
+    throw error;
+  }
+};
+
+// Get player by Clerk ID
+export const getPlayerByClerkId = async (clerkId: string) => {
+  try {
+    const response = await databases.listDocuments(
+      APPWRITE_DATABASE_ID,
+      COLLECTION_PLAYERS,
+      [Query.equal('clerkId', clerkId), Query.limit(1)]
+    );
+    
+    if (response.documents.length === 0) {
+      console.log(`No player found with clerkId "${clerkId}"`);
+      return null;
+    }
+    
+    return response.documents[0];
+  } catch (error) {
+    console.error(`Error fetching player with clerkId ${clerkId}:`, error);
+    throw error;
+  }
+};
+
+// Helper function to get flag emojis that will display correctly
+export const getFlagEmoji = (code: string) => {
+  if (!code) return '🏳️';
+  
+  // If the code already looks like an emoji, return it directly
+  if (code.length > 2 && code.match(/\p{Emoji}/u)) {
+    return code;
+  }
+  
+  // Map of country codes to flag emojis that are known to render properly
+  const flagEmojis: { [key: string]: string } = {
+    'bd': '🇧🇩',
+    'ng': '🇳🇬',
+    'pk': '🇵🇰',
+    'in': '🇮🇳',
+    'pl': '🇵🇱',
+    'ph': '🇵🇭',
+    'kr': '🇰🇷',
+    'jp': '🇯🇵',
+    'tr': '🇹🇷',
+    'us': '🇺🇸',
+    'uk': '🇬🇧',
+    'gb': '🇬🇧',
+    'ca': '🇨🇦',
+    'au': '🇦🇺',
+    'cn': '🇨🇳',
+    'de': '🇩🇪',
+    'fr': '🇫🇷',
+    'it': '🇮🇹',
+    'ru': '🇷🇺',
+    'br': '🇧🇷',
+    'mx': '🇲🇽',
+    'es': '🇪🇸',
+  };
+  
+  // Normalize the code (strip spaces, lowercase)
+  const normalizedCode = code.trim().toLowerCase();
+  
+  // Check if it's in our known working emoji map
+  if (flagEmojis[normalizedCode]) {
+    return flagEmojis[normalizedCode];
+  }
+  
+  // Only use the first two characters if it's longer
+  const codeToUse = normalizedCode.length > 2 ? normalizedCode.substring(0, 2) : normalizedCode;
+  
+  try {
+    // Convert country code to flag emoji
+    const codePoints = codeToUse
+      .toUpperCase()
+      .split('')
+      .map(char => 127397 + char.charCodeAt(0));
+    
+    return String.fromCodePoint(...codePoints);
+  } catch (e) {
+    console.error('Error converting country code to emoji:', code, e);
+    return '🏳️'; // Default flag as fallback
+  }
+};
+
+// Get players sorted by rating for leaderboard
+export const getPlayersByRating = async (limit = 50) => {
+  try {
+    const response = await databases.listDocuments(
+      APPWRITE_DATABASE_ID,
+      COLLECTION_PLAYERS,
+      [
+        Query.orderDesc('rating'),
+        Query.limit(limit)
+      ]
+    );
+    return response.documents;
+  } catch (error) {
+    console.error('Error fetching players by rating:', error);
+    return [];
+  }
+};
+
 export default {
   client,
   account,
@@ -1077,5 +1550,13 @@ export default {
   clearStorage,
   clearLocalAvatarData,
   getAllCountriesWithLogging,
-  restoreDefaultCountries
+  restoreDefaultCountries,
+  createEmailOtpSession,
+  updateEmailOtpSession,
+  createPlayer,
+  getPlayerByUsername,
+  getPlayerByClerkId,
+  getPlayersByRating,
+  updateMatchData
 }; 
+ 

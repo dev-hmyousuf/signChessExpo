@@ -84,6 +84,45 @@ If you prefer, you can also find support through our [Twitter](https://twitter.c
 
 A React Native mobile application with Appwrite for backend services and authentication.
 
+## Email OTP Authentication
+
+This app implements email OTP (One-Time Password) authentication using Appwrite's Email Token API. This provides a secure and user-friendly way to authenticate users without requiring them to remember passwords.
+
+### How It Works
+
+1. **Sending the OTP**:
+   - When a user signs up or requests verification, the app generates a unique ID and calls Appwrite's `createEmailToken` method.
+   - This sends an email to the user containing a 6-digit verification code.
+   - The app also displays a security phrase, which is included in the email to protect against phishing.
+
+2. **Verifying the OTP**:
+   - The user enters the 6-digit code they received.
+   - The app calls Appwrite's `createSession` method with the user ID and the code.
+   - If verified, a session is created and the user is logged in.
+
+### Security Features
+
+- **Security Phrase**: A random phrase shown on-screen and in the email helps users verify the authenticity of the email.
+- **Limited Validity**: The OTP codes expire after a short period for security.
+- **No Password Storage**: Since authentication happens via email, there are no passwords to store or manage.
+
+### Example Usage
+
+```javascript
+// Send OTP code to user's email
+const sessionToken = await account.createEmailToken(
+  ID.unique(),
+  'user@example.com',
+  true // Enable security phrase
+);
+
+// Store the userId for verification later
+const userId = sessionToken.userId;
+
+// When user enters the code
+const session = await account.createSession(userId, otpCode);
+```
+
 ## Theme Guidelines
 
 This app uses a consistent orange-based theme inspired by the Sign logo.

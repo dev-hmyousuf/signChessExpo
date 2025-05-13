@@ -1,7 +1,7 @@
 import React from 'react'
 import { TouchableOpacity, Text, StyleSheet, StyleProp, ViewStyle, ActivityIndicator } from 'react-native'
 import { router } from 'expo-router'
-import { logout } from '@/lib/appwrite'
+import { useAuth } from '@clerk/clerk-expo'
 import { THEME, BORDER_RADIUS } from '@/app/utils/theme'
 
 type SignOutButtonProps = {
@@ -10,14 +10,13 @@ type SignOutButtonProps = {
 
 export function SignOutButton({ style }: SignOutButtonProps) {
   const [loading, setLoading] = React.useState(false)
+  const { signOut } = useAuth()
 
   const onSignOutPress = async () => {
     try {
       setLoading(true)
-      const success = await logout()
-      if (success) {
-        router.replace('/')
-      }
+      await signOut()
+      router.replace('/')
     } catch (err) {
       console.error('Error signing out:', err)
     } finally {

@@ -9,6 +9,7 @@ import {
   View,
 } from "react-native";
 import { THEME, BORDER_RADIUS } from "../utils/theme";
+import { LinearGradient } from 'expo-linear-gradient';
 
 type ButtonProps = {
   label: string;
@@ -18,6 +19,7 @@ type ButtonProps = {
   loading?: boolean;
   disabled?: boolean;
   style?: ViewStyle;
+  gradient?: boolean;
 };
 
 export const Button: React.FC<ButtonProps> = ({
@@ -28,11 +30,12 @@ export const Button: React.FC<ButtonProps> = ({
   loading = false,
   disabled = false,
   style,
+  gradient = false,
 }) => {
   const containerStyles: ViewStyle[] = [
     styles.base,
     stylesBySize[size],
-    stylesByVariant[variant],
+    !gradient && stylesByVariant[variant],
     disabled ? styles.disabled : {},
     style || {},
   ];
@@ -43,17 +46,42 @@ export const Button: React.FC<ButtonProps> = ({
     size === "sm" ? styles.textSm : size === "lg" ? styles.textLg : {},
   ];
 
+  const renderContent = () => (
+    loading ? (
+      <ActivityIndicator color={variant === "primary" ? THEME.white : THEME.primary} />
+    ) : (
+      <Text style={textStyles}>{label}</Text>
+    )
+  );
+
+  if (gradient) {
+    return (
+      <TouchableOpacity
+        onPress={onPress}
+        style={containerStyles}
+        disabled={disabled || loading}
+        activeOpacity={0.8}
+      >
+        <LinearGradient
+          colors={[THEME.primary, '#F02E85']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={[styles.gradientContainer, stylesBySize[size]]}
+        >
+          {renderContent()}
+        </LinearGradient>
+      </TouchableOpacity>
+    );
+  }
+
   return (
     <TouchableOpacity
       onPress={onPress}
       style={containerStyles}
       disabled={disabled || loading}
+      activeOpacity={0.8}
     >
-      {loading ? (
-        <ActivityIndicator color={variant === "primary" ? THEME.white : THEME.primary} />
-      ) : (
-        <Text style={textStyles}>{label}</Text>
-      )}
+      {renderContent()}
     </TouchableOpacity>
   );
 };
@@ -76,6 +104,13 @@ const styles = StyleSheet.create({
   textLg: {
     fontSize: 18,
   },
+  gradientContainer: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: BORDER_RADIUS.md,
+  }
 });
 
 const stylesBySize: Record<string, ViewStyle> = {
@@ -85,11 +120,11 @@ const stylesBySize: Record<string, ViewStyle> = {
   },
   md: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingVertical: 12,
   },
   lg: {
     paddingHorizontal: 20,
-    paddingVertical: 12,
+    paddingVertical: 14,
   },
 };
 

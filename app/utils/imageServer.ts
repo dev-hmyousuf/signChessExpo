@@ -12,7 +12,7 @@ import { getFilenameFromUri, getMimeType } from '@/app/utils/fileUtils';
 // ======================================================================
 
 // IMPORTANT: CHANGE THIS VALUE TO YOUR RAILWAY DEPLOYED SERVER URL
-const SERVER_URL = 'https://your-app-name.railway.app';
+const SERVER_URL = 'https://signchessexpo-production.up.railway.app';
 
 // For local development (uncomment the appropriate line for testing):
 // const SERVER_URL = 'http://10.0.2.2:3000';      // Android Emulator

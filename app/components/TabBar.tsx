@@ -67,6 +67,7 @@ const TabBar = ({ state, descriptors, navigation }) => {
           if (routeName === 'matches') return 'game-controller';
           if (routeName === 'profile') return 'person';
           if (routeName === 'organizer-dashboard') return 'stats-chart';
+          if (routeName === 'chess') return 'game-controller';
           
           return 'apps';
         };

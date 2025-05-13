@@ -8,13 +8,11 @@ import {
   ScrollView,
   Alert,
   Linking,
-  FlatList,
   SafeAreaView,
   Animated,
-  Dimensions,
-  Image
+  Dimensions
 } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useUser } from '@clerk/clerk-expo';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -22,33 +20,25 @@ import { databases, APPWRITE_DATABASE_ID, COLLECTION_USERS } from '@/lib/appwrit
 import { Query } from 'react-native-appwrite';
 import { createProfileLink, openProfile, parseProfileLink } from '@/app/utils/linkUtils';
 import { THEME, SPACING, SHADOWS, BORDER_RADIUS } from '@/app/utils/theme';
-import DevToolsDashboard from '@/app/components/dev-tools';
 
 const { width } = Dimensions.get('window');
 
-export default function DevTools() {
+export default function ProfileTester() {
   const router = useRouter();
   const { user: clerkUser } = useUser();
-  const searchParams = useLocalSearchParams();
   const [username, setUsername] = useState('');
   const [userProfiles, setUserProfiles] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [profileLink, setProfileLink] = useState('');
   const [httpsLink, setHttpsLink] = useState('');
-  const [showDashboard, setShowDashboard] = useState(true);
-  
+
   // Animation values
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
   const buttonScale = useRef(new Animated.Value(1)).current;
 
-  // Check for the tool parameter to determine if we should show a specific tool
+  // Start entrance animation
   useEffect(() => {
-    if (searchParams.tool === 'profile') {
-      setShowDashboard(false);
-    }
-
-    // Start entrance animation
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
@@ -61,7 +51,7 @@ export default function DevTools() {
         useNativeDriver: true,
       })
     ]).start();
-  }, [searchParams]);
+  }, []);
 
   // Button press animation
   const animateButtonPress = (toValue: number) => {
@@ -161,19 +151,6 @@ export default function DevTools() {
     }
   };
 
-  // Toggle between dashboard and the profile testing tool
-  const toggleView = () => {
-    setShowDashboard(!showDashboard);
-  };
-
-  if (showDashboard) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <DevToolsDashboard />
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.safeArea}>
       <LinearGradient
@@ -187,7 +164,7 @@ export default function DevTools() {
         >
           <View style={styles.header}>
             <LinearGradient 
-              colors={[THEME.primary, '#3b82f6']}
+              colors={[THEME.primary, '#FF8C3D']}
               start={{x: 0, y: 0}} 
               end={{x: 1, y: 0}}
               style={styles.headerGradient}
@@ -197,7 +174,7 @@ export default function DevTools() {
               
               <TouchableOpacity
                 style={styles.backButton}
-                onPress={toggleView}
+                onPress={() => router.push('/dev-tools')}
                 activeOpacity={0.8}
               >
                 <LinearGradient 
@@ -206,32 +183,11 @@ export default function DevTools() {
                   start={{x: 0, y: 0}} 
                   end={{x: 1, y: 1}}
                 >
-                  <Ionicons name="apps" size={24} color={THEME.white} />
+                  <Ionicons name="arrow-back" size={24} color="#fff" />
                 </LinearGradient>
               </TouchableOpacity>
             </LinearGradient>
           </View>
-
-          {/* Direct Access Instructions */}
-          <Animated.View 
-            style={[
-              styles.directAccessNote,
-              {
-                opacity: fadeAnim,
-                transform: [{ translateY: slideAnim }]
-              }
-            ]}
-          >
-            <LinearGradient
-              colors={['rgba(255,255,255,0.9)', 'rgba(255,255,255,0.7)']}
-              style={styles.tipGradient}
-            >
-              <Ionicons name="information-circle-outline" size={20} color={THEME.primary} style={{marginRight: 8}} />
-              <Text style={styles.directAccessText}>
-                Use /dev-tools?tool=profile to directly access this tool
-              </Text>
-            </LinearGradient>
-          </Animated.View>
 
           {/* Quick Profile Navigation Form */}
           <Animated.View 
@@ -273,13 +229,13 @@ export default function DevTools() {
                 >
                   <Animated.View style={{transform: [{scale: buttonScale}]}}>
                     <LinearGradient
-                      colors={username ? [THEME.primary, '#3b82f6'] : ['#9ca3af', '#6b7280']}
+                      colors={username ? [THEME.primary, '#FF8C3D'] : ['#9ca3af', '#6b7280']}
                       style={styles.goButtonGradient}
                     >
                       <Ionicons 
                         name="arrow-forward" 
                         size={24} 
-                        color={THEME.white} 
+                        color="#fff" 
                       />
                     </LinearGradient>
                   </Animated.View>
@@ -313,12 +269,12 @@ export default function DevTools() {
               >
                 <Animated.View style={{transform: [{scale: buttonScale}], width: '100%'}}>
                   <LinearGradient 
-                    colors={[THEME.primary, '#3b82f6']}
+                    colors={[THEME.primary, '#FF8C3D']}
                     start={{x: 0, y: 0}} 
                     end={{x: 1, y: 0}}
                     style={styles.actionButtonGradient}
                   >
-                    <Ionicons name="person" size={20} color={THEME.white} />
+                    <Ionicons name="person" size={20} color="#fff" />
                     <Text style={styles.actionButtonText}>View Your Profile</Text>
                   </LinearGradient>
                 </Animated.View>
@@ -358,7 +314,7 @@ export default function DevTools() {
                     <View style={styles.linkTextContainer}>
                       <Text style={styles.linkText} selectable>{profileLink}</Text>
                       <LinearGradient
-                        colors={['rgba(255,255,255,0)', '#e0f2fe']}
+                        colors={['rgba(255,255,255,0)', '#FFE0CC']}
                         start={{x: 0, y: 0.5}}
                         end={{x: 1, y: 0.5}}
                         style={styles.linkFade}
@@ -371,7 +327,7 @@ export default function DevTools() {
                     <View style={styles.linkTextContainer}>
                       <Text style={styles.linkText} selectable>{httpsLink}</Text>
                       <LinearGradient
-                        colors={['rgba(255,255,255,0)', '#e0f2fe']}
+                        colors={['rgba(255,255,255,0)', '#FFE0CC']}
                         start={{x: 0, y: 0.5}}
                         end={{x: 1, y: 0.5}}
                         style={styles.linkFade}
@@ -388,12 +344,12 @@ export default function DevTools() {
                   >
                     <Animated.View style={{transform: [{scale: buttonScale}], width: '100%'}}>
                       <LinearGradient 
-                        colors={['#8b5cf6', '#a855f7']}
+                        colors={[THEME.accent, THEME.primary]}
                         start={{x: 0, y: 0}} 
                         end={{x: 1, y: 0}}
                         style={styles.actionButtonGradient}
                       >
-                        <Ionicons name="link" size={20} color={THEME.white} />
+                        <Ionicons name="link" size={20} color="#fff" />
                         <Text style={styles.actionButtonText}>Test Deep Link</Text>
                       </LinearGradient>
                     </Animated.View>
@@ -455,7 +411,7 @@ export default function DevTools() {
                     >
                       <View style={styles.userAvatarContainer}>
                         <LinearGradient
-                          colors={[THEME.primary, '#3b82f6']}
+                          colors={[THEME.primary, '#FF8C3D']}
                           style={styles.userAvatarGradient}
                         >
                           <Text style={styles.userInitial}>
@@ -518,7 +474,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 28,
     fontWeight: '700',
-    color: THEME.white,
+    color: '#fff',
     marginBottom: 4,
   },
   headerSubtitle: {
@@ -592,29 +548,10 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.lightGray,
   },
   actionButtonText: {
-    color: THEME.white,
+    color: '#fff',
     fontSize: 16,
     fontWeight: '600',
     marginLeft: SPACING.sm,
-  },
-  directAccessNote: {
-    marginHorizontal: SPACING.md,
-    marginTop: SPACING.md,
-    borderRadius: BORDER_RADIUS.md,
-    overflow: 'hidden',
-  },
-  tipGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: SPACING.md,
-    borderRadius: BORDER_RADIUS.md,
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.2)',
-  },
-  directAccessText: {
-    fontSize: 16,
-    color: THEME.textPrimary,
-    flex: 1,
   },
   quickFormSection: {
     marginHorizontal: SPACING.md,
@@ -685,7 +622,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: THEME.primary,
     padding: SPACING.sm,
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    backgroundColor: THEME.primaryTransparent,
     borderRadius: BORDER_RADIUS.sm,
   },
   linkFade: {
@@ -749,7 +686,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   userInitial: {
-    color: THEME.white,
+    color: '#fff',
     fontSize: 18,
     fontWeight: '600',
   },
@@ -767,7 +704,7 @@ const styles = StyleSheet.create({
     color: THEME.primary,
   },
   userArrow: {
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    backgroundColor: THEME.primaryTransparent,
     width: 32,
     height: 32,
     borderRadius: 16,

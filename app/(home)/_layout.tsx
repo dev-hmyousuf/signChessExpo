@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Tabs } from "expo-router";
+import { Tabs, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { ActivityIndicator, View, Text } from "react-native";
 import { account, getCurrentSession } from '@/lib/appwrite';
@@ -9,10 +9,11 @@ import {
   hasAdminPrivileges 
 } from '@/lib/permissionsHelper';
 import { THEME } from '@/app/utils/theme';
+import { useUser } from '@clerk/clerk-expo';
 
 // Admin configuration
 // Global admins/organizers who have access to everything
-const ORGANIZER_IDS = ['681a53f30021a9da4562', '681a4e7c0000eaa7dc45'];
+const ORGANIZER_IDS = ['681cceadb2ee3ee8c1ff'];
 
 /* 
  * APPWRITE PERMISSIONS STRUCTURE
@@ -20,7 +21,7 @@ const ORGANIZER_IDS = ['681a53f30021a9da4562', '681a4e7c0000eaa7dc45'];
  * For a proper role-based admin system, you need to set up permissions in Appwrite:
  *
  * 1. Create an "admin_roles" collection with these fields:
- *    - userId: string (user's ID from Appwrite)
+ *    - clerkId: string (user's ID from Clerk)
  *    - role: string (either "organizer" or "dynasty_admin")
  *    - dynastyId: string (country ID that the dynasty admin can manage, only for dynasty_admin role)
  *
@@ -45,7 +46,7 @@ const ORGANIZER_IDS = ['681a53f30021a9da4562', '681a4e7c0000eaa7dc45'];
 
 // Dynasty admin roles will be fetched from database
 interface AdminRole {
-  userId: string;
+  clerkId: string;
   role: 'organizer' | 'dynasty_admin';
   dynastyId?: string; // Country/dynasty ID for dynasty admins
 }
@@ -56,7 +57,9 @@ export default function Layout() {
   const [userIsOrganizer, setUserIsOrganizer] = useState(false);
   const [userIsDynastyAdmin, setUserIsDynastyAdmin] = useState(false);
   const [adminDynastyId, setAdminDynastyId] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
+  const [clerkId, setClerkId] = useState<string | null>(null);
+  const router = useRouter();
+  const { user: clerkUser, isLoaded: isClerkLoaded } = useUser();
 
   // Debug effect to monitor admin state changes
   useEffect(() => {
@@ -70,35 +73,38 @@ export default function Layout() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const session = await getCurrentSession();
-        if (session) {
-          // Get user data from account
-          const userData = await account.get();
-          const currentUserId = userData.$id;
-          setUserId(currentUserId);
-          
-          console.log("Checking for admin status");
-          console.log("Current user ID:", currentUserId);
-          
-          // Check if user is an organizer (highest level admin) using the helper
-          const organizerStatus = await isOrganizer(currentUserId);
-          setUserIsOrganizer(organizerStatus);
-          
-          // Check if user is a dynasty admin using the helper
-          const dynastyAdminStatus = await isDynastyAdmin(currentUserId);
-          setUserIsDynastyAdmin(dynastyAdminStatus.isDynastyAdmin);
-          setAdminDynastyId(dynastyAdminStatus.dynastyId);
-          
-          // Overall admin status - either organizer or dynasty admin
-          const isAnyAdmin = organizerStatus || dynastyAdminStatus.isDynastyAdmin;
-          setIsAdmin(isAnyAdmin);
-          
-          console.log("User is admin:", isAnyAdmin);
-          console.log("User is organizer:", userIsOrganizer);
-          console.log("User is dynasty admin:", dynastyAdminStatus.isDynastyAdmin);
-          if (dynastyAdminStatus.isDynastyAdmin) {
-            console.log("Dynasty ID:", dynastyAdminStatus.dynastyId);
-          }
+        // Check if Clerk user is loaded
+        if (!isClerkLoaded || !clerkUser) {
+          console.log("Clerk user not loaded yet or not signed in");
+          setIsLoaded(true);
+          return;
+        }
+
+        // Get Clerk user ID
+        const currentClerkId = clerkUser.id;
+        setClerkId(currentClerkId);
+        
+        console.log("Checking for admin status");
+        console.log("Current Clerk user ID:", currentClerkId);
+        
+        // Check if user is an organizer (highest level admin) using the helper
+        const organizerStatus = await isOrganizer(currentClerkId);
+        setUserIsOrganizer(organizerStatus);
+        
+        // Check if user is a dynasty admin using the helper
+        const dynastyAdminStatus = await isDynastyAdmin(currentClerkId);
+        setUserIsDynastyAdmin(dynastyAdminStatus.isDynastyAdmin);
+        setAdminDynastyId(dynastyAdminStatus.dynastyId);
+        
+        // Overall admin status - either organizer or dynasty admin
+        const isAnyAdmin = organizerStatus || dynastyAdminStatus.isDynastyAdmin;
+        setIsAdmin(isAnyAdmin);
+        
+        console.log("User is admin:", isAnyAdmin);
+        console.log("User is organizer:", organizerStatus);
+        console.log("User is dynasty admin:", dynastyAdminStatus.isDynastyAdmin);
+        if (dynastyAdminStatus.isDynastyAdmin) {
+          console.log("Dynasty ID:", dynastyAdminStatus.dynastyId);
         }
       } catch (error) {
         console.error("Authentication check failed:", error);
@@ -108,7 +114,7 @@ export default function Layout() {
     };
 
     checkAuth();
-  }, []);
+  }, [isClerkLoaded, clerkUser]);
 
   if (!isLoaded) {
     return (
@@ -122,76 +128,98 @@ export default function Layout() {
 
   return (
     <Tabs
-      screenOptions={({ route }) => ({
+      screenOptions={{
         headerShown: false,
-        tabBarIcon: ({ color, size }) => {
-          let iconName: React.ComponentProps<typeof Ionicons>["name"] = "home";
-
-          switch (route.name) {
-            case "index":
-              iconName = "home";
-              break;
-            case "dashboard":
-              iconName = "grid";
-              break;
-            case "admin-roles":
-              iconName = "people";
-              break;
-            case "dynasty-admin":
-              iconName = "flag";
-              break;
-            case "profile":
-              iconName = "person";
-              break;
-            case "chat": 
-              iconName = "chatbubble-ellipses";
-              break;
-            case "tournament":
-              iconName = "trophy";
-              break;
-            case "chess":
-              iconName = "game-controller";
-              break;
-          }
-
-          return <Ionicons name={iconName} size={size} color={color} />;
-        },
         tabBarActiveTintColor: THEME.primary,
         tabBarInactiveTintColor: THEME.darkGray,
-      })}
+      }}
     >
       {/* Main tab screens - these will display in the TabBar */}
-      <Tabs.Screen name="index" options={{ title: "Home" }} />
+      <Tabs.Screen 
+        name="index" 
+        options={{ 
+          title: "Home",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="home" size={size} color={color} />
+          )
+        }} 
+      />
 
       {/* Main admin dashboard - only for organizers */}
       <Tabs.Screen
         name="dashboard"
         options={{
           title: "Dashboard",
-          href: userIsOrganizer ? undefined : null, // Only show for organizers
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="grid" size={size} color={color} />
+          ),
+          href: userIsOrganizer ? undefined : null,
         }}
       />
      
-
       {/* Dynasty Admin dashboard - for country-specific admins */}
       <Tabs.Screen
         name="dynasty-admin"
         options={{
           title: "Dynasty Admin",
-          href: userIsDynastyAdmin ? undefined : null, // Only show for dynasty admins
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="flag" size={size} color={color} />
+          ),
+          href: userIsDynastyAdmin ? undefined : null,
         }}
       />
       
-      <Tabs.Screen name="chat" options={{ title: "Chat" }} />
-      <Tabs.Screen name="tournament" options={{ title: "Tournament" }} />
-      <Tabs.Screen name="chess" options={{ title: "Chess" }} />
-      <Tabs.Screen name="profile" options={{ title: "Profile" }} />
+      <Tabs.Screen 
+        name="chat" 
+        options={{ 
+          title: "Chat",
+          href: null,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="chatbubble-ellipses" size={size} color={color} />
+          )
+        }} 
+      />
       
-      {/* Dynamic routes that should be excluded from the TabBar completely */}
+      <Tabs.Screen 
+        name="tournament" 
+        options={{ 
+          title: "Tournament",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="trophy" size={size} color={color} />
+          )
+        }} 
+      />
+      
+      <Tabs.Screen 
+        name="chess" 
+        options={{ 
+          title: "Chess",
+          href: null,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="game-controller" size={size} color={color} />
+          )
+        }} 
+      />
+      
+      <Tabs.Screen 
+        name="profile" 
+        options={{ 
+          title: "Profile",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="person" size={size} color={color} />
+          ),
+          href: "/profile"
+        }} 
+      />
+      
+      {/* Dynamic routes - use the expo-router recommended pattern */}
       <Tabs.Screen name="match" options={{ href: null }} />
       <Tabs.Screen name="match/[matchId]" options={{ href: null }} />
       <Tabs.Screen name="tournament/[dynasty]" options={{ href: null }} />
       <Tabs.Screen name="player-registration" options={{ href: null }} />
+      <Tabs.Screen name="dev-tools" options={{ href: null }} />
+      <Tabs.Screen name="restore-countries" options={{ href: null }} />
+      <Tabs.Screen name="test-upload" options={{ href: null }} />
     </Tabs>
   );
 }
